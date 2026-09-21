@@ -68,17 +68,23 @@ struct _VasakPermisosMedios
   /* id del cliente -> VasakDecision. Lo que no está es cero, que es NEGADA:
    * un cliente del que todavía no sabemos nada no tiene la cámara. */
   GHashTable *decisiones;
+  /* Consultas que llegaron antes que el bus del sistema. */
+  GPtrArray *pendientes;
   GCancellable *cancelable;
 };
 
 G_DECLARE_FINAL_TYPE (VasakPermisosMedios, vasak_permisos_medios,
                       VASAK, PERMISOS_MEDIOS, WpPlugin)
+
+typedef struct _Consulta Consulta;
+static void consulta_libre (Consulta *c);
 G_DEFINE_TYPE (VasakPermisosMedios, vasak_permisos_medios, WP_TYPE_PLUGIN)
 
 static void
 vasak_permisos_medios_init (VasakPermisosMedios *self)
 {
   self->decisiones = g_hash_table_new (g_direct_hash, g_direct_equal);
+  self->pendientes = g_ptr_array_new_with_free_func ((GDestroyNotify) consulta_libre);
   self->cancelable = g_cancellable_new ();
 }
 
@@ -110,29 +116,52 @@ permisos_sobre (WpPermissionManager *gestor, WpClient *cliente,
                                wp_properties_get (props, "device.api")))
     return por_omision;
 
-  guint id = wp_proxy_get_bound_id (WP_PROXY (cliente));
-  gpointer guardada = g_hash_table_lookup (self->decisiones,
-                                           GUINT_TO_POINTER (id));
+  /*
+   * La identidad es **el objeto cliente**, no su id.
+   *
+   * Los ids globales de PipeWire se reciclan. Con la tabla indexada por id, y
+   * sin limpiarla cuando el cliente se va, un cliente posterior que recibiera
+   * el mismo número heredaba el «permitida» de otro y se llevaba la cámara.
+   * Es la misma trampa que el servicio de permisos evita fijando el pid, un
+   * piso más arriba, y acá estaba reintroducida — la marcó CodeRabbit en el
+   * PR #1.
+   *
+   * Indexar por el puntero del objeto lo cierra sólo si la entrada se borra
+   * cuando el objeto muere, porque un puntero liberado también se reutiliza.
+   * De eso se ocupa `al_morir_el_cliente()`, enganchado con
+   * `g_object_weak_ref` en el mismo momento en que se adjunta el gestor.
+   */
+  gpointer guardada = g_hash_table_lookup (self->decisiones, cliente);
 
-  /* Lo que no está en la tabla vale cero, que es NEGADA. Eso cubre los dos
-   * casos que importan: el cliente cuya consulta todavía no volvió, y aquel
-   * cuya consulta falló. Mientras no sepamos que sí, es que no. */
+  /* Lo que no está en la tabla vale cero, que es NEGADA. Eso cubre los tres
+   * casos que importan: el cliente cuya consulta todavía no volvió, aquel
+   * cuya consulta falló, y el que nunca llegó a preguntarse. Mientras no
+   * sepamos que sí, es que no. */
   return (GPOINTER_TO_UINT (guardada) == VASAK_DECISION_PERMITIDA)
              ? por_omision
              : 0;
 }
 
-/* Lo que hace falta recordar mientras la consulta va y viene. */
-typedef struct
+/* Lo que hace falta recordar mientras la consulta va y viene.
+ *
+ * El cliente va como referencia **débil**: si se desconecta mientras la
+ * consulta viaja, la respuesta no tiene a quién aplicarse y se descarta. Una
+ * referencia fuerte lo mantendría vivo de más y una cruda podría apuntar a
+ * otro. */
+struct _Consulta
 {
-  VasakPermisosMedios *self;
-  guint id_cliente;
+  VasakPermisosMedios *self; /* con referencia: la consulta lo sobrevive */
+  GWeakRef cliente;
   gchar *nombre;
-} Consulta;
+  pid_t pid;
+  guint64 inicio;
+};
 
 static void
 consulta_libre (Consulta *c)
 {
+  g_weak_ref_clear (&c->cliente);
+  g_clear_object (&c->self);
   g_free (c->nombre);
   g_free (c);
 }
@@ -146,15 +175,22 @@ al_contestar_el_servicio (GObject *fuente, GAsyncResult *res, gpointer datos)
       G_DBUS_CONNECTION (fuente), res, &error);
 
   if (respuesta == NULL) {
-    if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
-      consulta_libre (c);
-      return;
-    }
-    /* No se anota nada: la tabla ya dice NEGADA por omisión, y dejarlo así es
-     * lo correcto. Si el servicio no contesta, no hay permiso que mostrar. */
-    wp_warning ("no se pudo consultar el permiso de cámara de '%s': %s — "
-                "queda sin cámara",
-                c->nombre, error->message);
+    if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+      /* No se anota nada: la tabla ya dice NEGADA, y dejarlo así es lo
+       * correcto. Si el servicio no contesta, no hay permiso que mostrar. */
+      wp_warning ("no se pudo consultar el permiso de cámara de '%s': %s — "
+                  "queda sin cámara",
+                  c->nombre, error->message);
+    consulta_libre (c);
+    return;
+  }
+
+  /* ¿Sigue siendo el mismo cliente? Si se fue, la respuesta se tira: anotarla
+   * dejaría un permiso suelto esperando a que alguien herede su lugar. */
+  g_autoptr (WpClient) cliente = g_weak_ref_get (&c->cliente);
+  if (cliente == NULL) {
+    wp_debug ("'%s' se desconectó antes de la respuesta; se descarta",
+              c->nombre);
     consulta_libre (c);
     return;
   }
@@ -163,12 +199,11 @@ al_contestar_el_servicio (GObject *fuente, GAsyncResult *res, gpointer datos)
   g_variant_get (respuesta, "(&s)", &texto);
   VasakDecision decision = vasak_medios_decision_desde_texto (texto);
 
-  g_hash_table_insert (c->self->decisiones,
-                       GUINT_TO_POINTER (c->id_cliente),
+  g_hash_table_insert (c->self->decisiones, cliente,
                        GUINT_TO_POINTER (decision));
 
   wp_info ("cámara para '%s': %s", c->nombre,
-           decision == VASAK_DECISION_PERMITIDA   ? "permitida"
+           decision == VASAK_DECISION_PERMITIDA     ? "permitida"
            : decision == VASAK_DECISION_SIN_DECIDIR ? "sin decidir, o sea que no"
                                                     : "negada");
 
@@ -179,24 +214,55 @@ al_contestar_el_servicio (GObject *fuente, GAsyncResult *res, gpointer datos)
 }
 
 static void
+enviar_consulta (Consulta *c)
+{
+  g_dbus_connection_call (
+      c->self->bus, VASAK_SERVICIO, VASAK_RUTA, VASAK_INTERFAZ, VASAK_METODO,
+      g_variant_new ("(uts)", (guint32) c->pid, c->inicio,
+                     VASAK_RECURSO_CAMARA),
+      G_VARIANT_TYPE ("(s)"), G_DBUS_CALL_FLAGS_NONE, -1, c->self->cancelable,
+      al_contestar_el_servicio, c);
+}
+
+static void
 preguntar_por (VasakPermisosMedios *self, WpClient *cliente,
                const gchar *nombre, pid_t pid, guint64 inicio)
 {
+  Consulta *c = g_new0 (Consulta, 1);
+  c->self = g_object_ref (self);
+  g_weak_ref_init (&c->cliente, cliente);
+  c->nombre = g_strdup (nombre ? nombre : "?");
+  c->pid = pid;
+  c->inicio = inicio;
+
+  /*
+   * El bus del sistema se pide de forma asíncrona al activarse el módulo, así
+   * que los primeros clientes de la sesión pueden llegar antes que él. Quedan
+   * encolados y se preguntan cuando el bus está.
+   *
+   * Descartarlos sería fallar cerrado, que suena bien y no lo es: son justo
+   * los clientes que arrancan con la sesión, y quedarían **sin cámara para
+   * siempre** aunque la persona se la haya concedido, sin nada que lo vuelva
+   * a intentar. Mientras tanto siguen negados, que es lo correcto.
+   */
   if (self->bus == NULL) {
-    wp_warning ("sin bus del sistema: '%s' queda sin cámara", nombre);
+    wp_debug ("todavía no hay bus del sistema: '%s' queda en la cola",
+              c->nombre);
+    g_ptr_array_add (self->pendientes, c);
     return;
   }
 
-  Consulta *c = g_new0 (Consulta, 1);
-  c->self = self;
-  c->id_cliente = wp_proxy_get_bound_id (WP_PROXY (cliente));
-  c->nombre = g_strdup (nombre ? nombre : "?");
+  enviar_consulta (c);
+}
 
-  g_dbus_connection_call (
-      self->bus, VASAK_SERVICIO, VASAK_RUTA, VASAK_INTERFAZ, VASAK_METODO,
-      g_variant_new ("(uts)", (guint32) pid, inicio, VASAK_RECURSO_CAMARA),
-      G_VARIANT_TYPE ("(s)"), G_DBUS_CALL_FLAGS_NONE, -1, self->cancelable,
-      al_contestar_el_servicio, c);
+/* Cuando el cliente se va, su decisión se va con él. Sin esto la tabla crece
+ * sola y —peor— deja un permiso esperando a que otro objeto ocupe la misma
+ * dirección. */
+static void
+al_morir_el_cliente (gpointer datos, GObject *muerto)
+{
+  VasakPermisosMedios *self = datos;
+  g_hash_table_remove (self->decisiones, muerto);
 }
 
 /*
@@ -279,6 +345,15 @@ al_seleccionar_acceso (WpEvent *evento, gpointer datos)
   wp_event_set_data (evento, "permission-manager", &valor);
   g_value_unset (&valor);
 
+  /* Entra en la tabla ya negado, y se engancha su muerte para que la entrada
+   * no le sobreviva. Las dos cosas acá y no al contestar: entre que se
+   * pregunta y que llega la respuesta el cliente puede irse. */
+  if (!g_hash_table_contains (self->decisiones, cliente)) {
+    g_hash_table_insert (self->decisiones, cliente,
+                         GUINT_TO_POINTER (VASAK_DECISION_NEGADA));
+    g_object_weak_ref (G_OBJECT (cliente), al_morir_el_cliente, self);
+  }
+
   preguntar_por (self, cliente, nombre, pid, inicio);
 }
 
@@ -295,7 +370,34 @@ al_tener_el_bus (GObject *fuente G_GNUC_UNUSED, GAsyncResult *res,
       wp_warning_object (self,
                          "sin bus del sistema (%s): nadie va a tener cámara",
                          error->message);
+    /* Y la cola se tira: sin bus no hay a quién preguntarle, y los clientes
+     * encolados quedan negados, que es la dirección correcta. No se reintenta
+     * tomar el bus; si eso hiciera falta se vería como «nadie tiene cámara»,
+     * que es visible y no silencioso. */
+    g_ptr_array_set_size (self->pendientes, 0);
     return;
+  }
+
+  /* La cola: los clientes que se conectaron antes que el bus. Sin esto quedan
+   * negados para siempre aunque la persona les haya dado permiso, porque nada
+   * los vuelve a mirar. */
+  if (self->pendientes->len > 0) {
+    wp_info_object (self, "bus del sistema listo: se preguntan %u consultas "
+                          "que estaban esperando",
+                    self->pendientes->len);
+
+    /* Se sacan del arreglo sin liberarlas: `enviar_consulta` toma la
+     * propiedad y la libera al contestar. */
+    g_autoptr (GPtrArray) cola = g_ptr_array_new ();
+    for (guint i = 0; i < self->pendientes->len; i++)
+      g_ptr_array_add (cola, g_ptr_array_index (self->pendientes, i));
+    g_ptr_array_set_free_func (self->pendientes, NULL);
+    g_ptr_array_set_size (self->pendientes, 0);
+    g_ptr_array_set_free_func (self->pendientes,
+                               (GDestroyNotify) consulta_libre);
+
+    for (guint i = 0; i < cola->len; i++)
+      enviar_consulta (g_ptr_array_index (cola, i));
   }
 }
 
@@ -383,6 +485,7 @@ vasak_permisos_medios_disable (WpPlugin *plugin)
 
   g_clear_object (&self->bus);
   g_clear_object (&self->gestor);
+  g_ptr_array_set_size (self->pendientes, 0);
   g_hash_table_remove_all (self->decisiones);
 
   wp_object_update_features (WP_OBJECT (self), 0, WP_PLUGIN_FEATURE_ENABLED);
