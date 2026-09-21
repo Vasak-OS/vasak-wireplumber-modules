@@ -1,0 +1,51 @@
+# Acá no se llama al workflow compartido de la organización.
+#
+# Ese está hecho para las aplicaciones: mira `package.json`, `Cargo.toml`,
+# biome, `vue-tsc`. Este repositorio no tiene nada de eso —es C con meson— y
+# llamarlo sería pedirle que comprobara archivos que no existen.
+#
+# Tampoco se compila el módulo en sí. Necesita los encabezados de WirePlumber
+# 0.5, que no están en los repositorios de Ubuntu, así que hacerlo pediría un
+# contenedor de Arch en cada corrida. El módulo se compila al armar el paquete,
+# que es donde esa dependencia ya está. No se deja un paso que lo intente y se
+# perdone si falla: un paso que no puede fallar no comprueba nada y hace creer
+# que sí.
+#
+# Lo que sí se comprueba es lo único que decide algo: `camara.c` e
+# `identidad.c`. Están separados del enganche con WirePlumber justamente para
+# esto — no incluyen ni un encabezado de `wp/`, así que compilan y corren con
+# glib pelado.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pruebas:
+    runs-on: ubuntu-latest
+    # Sólo lectura: clona, compila y corre pruebas. No comenta, no etiqueta, no
+    # publica.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar glib
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
+
+      - name: Compilar y correr las pruebas
+        run: |
+          set -e
+          for prueba in identidad camara; do
+            gcc -std=c11 -Wall -Wextra -Werror \
+              $(pkg-config --cflags glib-2.0) \
+              -I src/permisos-de-medios \
+              -o "pruebas-$prueba" \
+              "pruebas/$prueba.c" \
+              src/permisos-de-medios/camara.c \
+              src/permisos-de-medios/identidad.c \
+              $(pkg-config --libs glib-2.0)
+            "./pruebas-$prueba"
+          done
