@@ -4,6 +4,7 @@
 decisiones = static_library('decisiones',
     'camara.c',
     'identidad.c',
+    'servicio.c',
     dependencies: dependency('glib-2.0'),
     install: false)
 
