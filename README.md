@@ -8,10 +8,12 @@ Identifica a cada cliente de PipeWire por su **pid**, que es lo único que el
 cliente no puede ni falsear ni elegir, para que el permiso de cámara sea por
 aplicación.
 
-**Hoy no niega nada.** Se engancha donde se deciden los accesos, resuelve quién
-es cada cliente y lo anota. Eso es la primera de dos etapas, y es a propósito:
-antes de quitarle la cámara a alguien conviene ver qué clientes aparecen en una
-sesión de verdad.
+Le pregunta a `vasak-permissions` por cada cliente que se conecta y le oculta
+los objetos de cámara al que no tenga permiso. **Falla cerrando**: mientras la
+respuesta no llegue, y si no llega nunca, el cliente no tiene cámara.
+
+Medido con el módulo cargado en un WirePlumber de verdad: un cliente normal ve
+**0** nodos de cámara y logra **0 de 5** capturas, y el audio no se toca.
 
 ### Por qué existe
 
@@ -67,7 +69,15 @@ La cámara no tiene ese problema —no hay camino de pulse para video— pero el
 micrófono del navegador sí. Hacerlo cumplir es un trabajo dentro de
 `pipewire-pulse`, otro componente y otro problema.
 
-### Dos trampas que costaron encontrar
+### Tres trampas que costaron encontrar
+
+**El orden de los enganches se declara entero o no sirve.** Todos los que
+reparten acceso se declaran «antes de `client/apply-access`», así que nombrar
+sólo a ése deja al nuestro sin orden respecto de
+`client/find-default-access` — que reparte el gestor por omisión— y éste gana
+la carrera. Cuando el nuestro corre ya hay un gestor puesto, se aparta como
+corresponde, y la cámara queda abierta **sin una sola queja en el registro**.
+Hay una prueba que lo comprueba, porque el compilador no puede.
 
 **El closure de un enganche recibe un solo parámetro.** El encabezado de
 WirePlumber dice «the closure should accept two parameters: the event

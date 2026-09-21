@@ -44,8 +44,10 @@
 
 #include "camara.h"
 #include "identidad.h"
+#include "servicio.h"
 
 #include <wp/wp.h>
+#include <pipewire/permission.h>
 
 WP_DEFINE_LOCAL_LOG_TOPIC ("m-vasak-medios")
 
@@ -61,6 +63,12 @@ struct _VasakPermisosMedios
 {
   WpPlugin parent;
   WpEventHook *enganche;
+  WpPermissionManager *gestor;
+  GDBusConnection *bus;
+  /* id del cliente -> VasakDecision. Lo que no está es cero, que es NEGADA:
+   * un cliente del que todavía no sabemos nada no tiene la cámara. */
+  GHashTable *decisiones;
+  GCancellable *cancelable;
 };
 
 G_DECLARE_FINAL_TYPE (VasakPermisosMedios, vasak_permisos_medios,
@@ -68,8 +76,127 @@ G_DECLARE_FINAL_TYPE (VasakPermisosMedios, vasak_permisos_medios,
 G_DEFINE_TYPE (VasakPermisosMedios, vasak_permisos_medios, WP_TYPE_PLUGIN)
 
 static void
-vasak_permisos_medios_init (VasakPermisosMedios *self G_GNUC_UNUSED)
+vasak_permisos_medios_init (VasakPermisosMedios *self)
 {
+  self->decisiones = g_hash_table_new (g_direct_hash, g_direct_equal);
+  self->cancelable = g_cancellable_new ();
+}
+
+/*
+ * Qué permisos tiene un cliente sobre un objeto.
+ *
+ * El interés con que se registra esto es amplio a propósito —cualquier objeto
+ * con `media.class`— y quien decide es `vasak_medios_es_camara()`, que está
+ * probada. Acotar el interés a la cámara dejaría la regla escrita en dos
+ * lugares, y el día que uno cambie el otro no: negar de más deja al escritorio
+ * sin compartir pantalla, negar de menos deja la cámara abierta, y las dos se
+ * ven igual de bien mirando el código.
+ */
+static guint32
+permisos_sobre (WpPermissionManager *gestor, WpClient *cliente,
+                WpGlobalProxy *objeto, gpointer datos)
+{
+  VasakPermisosMedios *self = datos;
+
+  g_autoptr (WpProperties) props =
+      wp_pipewire_object_get_properties (WP_PIPEWIRE_OBJECT (objeto));
+  guint32 por_omision = wp_permission_manager_get_default_permissions (gestor);
+
+  if (props == NULL)
+    return por_omision;
+
+  if (!vasak_medios_es_camara (wp_properties_get (props, "media.class"),
+                               wp_properties_get (props, "media.role"),
+                               wp_properties_get (props, "device.api")))
+    return por_omision;
+
+  guint id = wp_proxy_get_bound_id (WP_PROXY (cliente));
+  gpointer guardada = g_hash_table_lookup (self->decisiones,
+                                           GUINT_TO_POINTER (id));
+
+  /* Lo que no está en la tabla vale cero, que es NEGADA. Eso cubre los dos
+   * casos que importan: el cliente cuya consulta todavía no volvió, y aquel
+   * cuya consulta falló. Mientras no sepamos que sí, es que no. */
+  return (GPOINTER_TO_UINT (guardada) == VASAK_DECISION_PERMITIDA)
+             ? por_omision
+             : 0;
+}
+
+/* Lo que hace falta recordar mientras la consulta va y viene. */
+typedef struct
+{
+  VasakPermisosMedios *self;
+  guint id_cliente;
+  gchar *nombre;
+} Consulta;
+
+static void
+consulta_libre (Consulta *c)
+{
+  g_free (c->nombre);
+  g_free (c);
+}
+
+static void
+al_contestar_el_servicio (GObject *fuente, GAsyncResult *res, gpointer datos)
+{
+  Consulta *c = datos;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GVariant) respuesta = g_dbus_connection_call_finish (
+      G_DBUS_CONNECTION (fuente), res, &error);
+
+  if (respuesta == NULL) {
+    if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED)) {
+      consulta_libre (c);
+      return;
+    }
+    /* No se anota nada: la tabla ya dice NEGADA por omisión, y dejarlo así es
+     * lo correcto. Si el servicio no contesta, no hay permiso que mostrar. */
+    wp_warning ("no se pudo consultar el permiso de cámara de '%s': %s — "
+                "queda sin cámara",
+                c->nombre, error->message);
+    consulta_libre (c);
+    return;
+  }
+
+  const gchar *texto = NULL;
+  g_variant_get (respuesta, "(&s)", &texto);
+  VasakDecision decision = vasak_medios_decision_desde_texto (texto);
+
+  g_hash_table_insert (c->self->decisiones,
+                       GUINT_TO_POINTER (c->id_cliente),
+                       GUINT_TO_POINTER (decision));
+
+  wp_info ("cámara para '%s': %s", c->nombre,
+           decision == VASAK_DECISION_PERMITIDA   ? "permitida"
+           : decision == VASAK_DECISION_SIN_DECIDIR ? "sin decidir, o sea que no"
+                                                    : "negada");
+
+  /* Recalcular. Sin esto la respuesta queda guardada y no llega al cliente:
+   * los permisos se empujan acá, no al leerlos. */
+  wp_permission_manager_update_permissions (c->self->gestor);
+  consulta_libre (c);
+}
+
+static void
+preguntar_por (VasakPermisosMedios *self, WpClient *cliente,
+               const gchar *nombre, pid_t pid, guint64 inicio)
+{
+  if (self->bus == NULL) {
+    wp_warning ("sin bus del sistema: '%s' queda sin cámara", nombre);
+    return;
+  }
+
+  Consulta *c = g_new0 (Consulta, 1);
+  c->self = self;
+  c->id_cliente = wp_proxy_get_bound_id (WP_PROXY (cliente));
+  c->nombre = g_strdup (nombre ? nombre : "?");
+
+  g_dbus_connection_call (
+      self->bus, VASAK_SERVICIO, VASAK_RUTA, VASAK_INTERFAZ, VASAK_METODO,
+      g_variant_new ("(uts)", (guint32) pid, inicio, VASAK_RECURSO_CAMARA),
+      G_VARIANT_TYPE ("(s)"), G_DBUS_CALL_FLAGS_NONE, -1, self->cancelable,
+      al_contestar_el_servicio, c);
 }
 
 /*
@@ -85,7 +212,7 @@ vasak_permisos_medios_init (VasakPermisosMedios *self G_GNUC_UNUSED)
  * devuelve un cliente, y el enganche **se calla**. Parece que no dispara nunca.
  */
 static void
-al_seleccionar_acceso (WpEvent *evento, gpointer datos G_GNUC_UNUSED)
+al_seleccionar_acceso (WpEvent *evento, gpointer datos)
 {
   g_autoptr (WpClient) cliente = WP_CLIENT (wp_event_get_subject (evento));
   if (cliente == NULL)
@@ -127,23 +254,49 @@ al_seleccionar_acceso (WpEvent *evento, gpointer datos G_GNUC_UNUSED)
     return;
   }
 
-  /*
-   * Acá va, en la segunda etapa, la consulta a `vasak-permissions`:
+  VasakPermisosMedios *self = datos;
+
+  /* Si otro ya decidió por este cliente —la configuración, o el portal— lo
+   * suyo vale. El del portal es el camino que pregunta, y pisarlo dejaría a
+   * una aplicación con la cámara concedida sin poder usarla. */
+  if (wp_event_get_data (evento, "permission-manager") != NULL ||
+      wp_event_get_data (evento, "default-permissions") != NULL) {
+    wp_debug_object (cliente, "'%s' ya tiene quien decida por él",
+                     nombre ? nombre : "?");
+    return;
+  }
+
+  /* El gestor se adjunta **antes** de preguntar, y por eso el cliente queda
+   * sin cámara desde el primer momento: la tabla todavía no dice nada sobre
+   * él, y lo que no está vale NEGADA. La respuesta sólo puede mejorar eso.
    *
-   *     CheckPermissionFor(pid, inicio, "device.camera", "")
-   *
-   * sobre `ar.net.vasak.os.Permissions` en el bus del sistema, y con la
-   * respuesta se le adjunta al cliente un gestor de permisos que oculte los
-   * objetos que `vasak_medios_es_camara()` reconozca.
-   *
-   * La consulta es asíncrona y la respuesta tarda: mientras no llegue, el
-   * cliente tiene que quedar **sin** la cámara y no con ella. Fallar abriendo
-   * acá es no tener permiso.
-   */
-  wp_info_object (cliente,
-                  "identificado '%s': pid %d, arranque %" G_GUINT64_FORMAT
-                  " — todavía no se le niega nada",
-                  nombre ? nombre : "?", (int) pid, inicio);
+   * Al revés —preguntar primero y adjuntar después— dejaría una ventana con
+   * la cámara abierta, que es exactamente la carrera que ya tiene WirePlumber
+   * y que no hay por qué agrandar. */
+  GValue valor = G_VALUE_INIT;
+  g_value_init (&valor, G_TYPE_OBJECT);
+  g_value_set_object (&valor, self->gestor);
+  wp_event_set_data (evento, "permission-manager", &valor);
+  g_value_unset (&valor);
+
+  preguntar_por (self, cliente, nombre, pid, inicio);
+}
+
+static void
+al_tener_el_bus (GObject *fuente G_GNUC_UNUSED, GAsyncResult *res,
+                 gpointer datos)
+{
+  g_autoptr (VasakPermisosMedios) self = datos;
+  g_autoptr (GError) error = NULL;
+
+  self->bus = g_bus_get_finish (res, &error);
+  if (self->bus == NULL) {
+    if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+      wp_warning_object (self,
+                         "sin bus del sistema (%s): nadie va a tener cámara",
+                         error->message);
+    return;
+  }
 }
 
 static void
@@ -154,12 +307,32 @@ vasak_permisos_medios_enable (WpPlugin *plugin,
   g_autoptr (WpCore) core = wp_object_get_core (WP_OBJECT (self));
 
   /*
-   * Después de los que reparten acceso y antes del que lo aplica, que es donde
-   * el de configuración y el del portal se ponen. Si alguno de ésos ya decidió,
-   * lo suyo vale: acá sólo se mira.
+   * Después del de configuración y **antes del que reparte lo de por
+   * omisión**, que es exactamente donde se pone `find-portal-access`.
+   *
+   * Nombrar sólo `apply-access` no alcanza y el fallo es silencioso: los dos
+   * quedan «antes de apply-access» sin orden entre sí,
+   * `client/find-default-access` gana la carrera, pone su gestor, y este
+   * enganche se encuentra con que alguien ya decidió y se aparta. Medido —el
+   * registro decía «ya tiene quien decida por él» para todos los clientes— y
+   * se ve como que el módulo no niega nada.
    */
-  static const gchar *antes[] = { "client/apply-access", NULL };
+  static const gchar *antes[] = { "client/find-default-access",
+                                  "client/apply-access", NULL };
   static const gchar *despues[] = { "client/find-config-access", NULL };
+
+  /*
+   * El gestor por omisión da **todos** los permisos: lo único que se quita es
+   * lo que `permisos_sobre()` reconozca como cámara. Un gestor que negara por
+   * omisión le sacaría al cliente el audio y todo lo demás.
+   */
+  self->gestor = wp_permission_manager_new (core);
+  wp_permission_manager_set_default_permissions (self->gestor, PW_PERM_ALL);
+  wp_permission_manager_add_interest_match (
+      self->gestor, permisos_sobre, self,
+      wp_object_interest_new (WP_TYPE_GLOBAL_PROXY,
+                              WP_CONSTRAINT_TYPE_PW_PROPERTY, "media.class",
+                              "+", NULL, NULL));
 
   self->enganche = wp_simple_event_hook_new (
       "vasak/permisos-de-medios", antes, despues,
@@ -174,7 +347,20 @@ vasak_permisos_medios_enable (WpPlugin *plugin,
       wp_event_dispatcher_get_instance (core);
   wp_event_dispatcher_register_hook (despachador, self->enganche);
 
-  wp_info_object (self, "permisos-de-medios activo (sólo anota, no niega)");
+  /*
+   * El bus del sistema, que es donde vive `vasak-permissions` — corre como
+   * root porque tiene que leer `/proc/<pid>/exe` de procesos ajenos.
+   *
+   * Se pide de forma asíncrona y el enganche ya quedó registrado: si un
+   * cliente se conecta antes de que el bus esté, `preguntar_por()` no tiene
+   * por dónde preguntar y lo deja sin cámara. Es la dirección correcta de
+   * fallar, y es preferible a esperar al bus con el enganche sin registrar,
+   * que dejaría a esos clientes sin gestor y **con** la cámara.
+   */
+  g_bus_get (G_BUS_TYPE_SYSTEM, self->cancelable, al_tener_el_bus,
+             g_object_ref (self));
+
+  wp_info_object (self, "permisos-de-medios activo");
   wp_object_update_features (WP_OBJECT (self), WP_PLUGIN_FEATURE_ENABLED, 0);
 }
 
@@ -190,6 +376,14 @@ vasak_permisos_medios_disable (WpPlugin *plugin)
     wp_event_dispatcher_unregister_hook (despachador, self->enganche);
     g_clear_object (&self->enganche);
   }
+
+  g_cancellable_cancel (self->cancelable);
+  g_clear_object (&self->cancelable);
+  self->cancelable = g_cancellable_new ();
+
+  g_clear_object (&self->bus);
+  g_clear_object (&self->gestor);
+  g_hash_table_remove_all (self->decisiones);
 
   wp_object_update_features (WP_OBJECT (self), 0, WP_PLUGIN_FEATURE_ENABLED);
 }
