@@ -34,8 +34,20 @@ else
     mal "falta $FRAGMENTO"
 fi
 
-if grep -qE "install_data\('$FRAGMENTO'" meson.build; then
+# Que se instale, **y dónde**. Las dos cosas: un fragmento instalado fuera de
+# `wireplumber.conf.d` no lo descubre nadie, y desde acá se ve igual de bien que
+# uno bien puesto. Lo marcó CodeRabbit en el PR #2.
+# awk y no sed: la ruta del fragmento lleva `/`, que en una dirección de sed
+# es el delimitador y parte la expresión.
+instala=$(awk -v f="install_data('$FRAGMENTO'" \
+    'index($0, f) { dentro = 1 } dentro { print } dentro && /\)/ { exit }' meson.build)
+if [ -n "$instala" ]; then
     ok "y el paquete lo instala"
+    if grep -qE "install_dir:.*'wireplumber'.*'wireplumber\.conf\.d'" <<<"$instala"; then
+        ok "en el directorio donde WirePlumber los busca"
+    else
+        mal "no se instala en wireplumber.conf.d: WirePlumber no lo va a descubrir"
+    fi
 else
     mal "meson.build no instala $FRAGMENTO: el módulo no lo carga nadie"
 fi
