@@ -10,3 +10,6 @@ test('servicio', executable('pruebas-servicio', 'servicio.c',
 # El orden de los enganches. No lo ve el compilador, y cuando está mal el
 # módulo no niega nada **y no se queja**.
 test('el-orden-del-enganche', find_program('el-orden-del-enganche.sh'))
+
+# Que el módulo viaje apagado y que el fragmento que lo declara se instale.
+test('viene-apagado', find_program('viene-apagado.sh'))
