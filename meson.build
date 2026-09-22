@@ -29,5 +29,11 @@ if not import('fs').is_dir(moduledir)
     warning('No existe @0@. WirePlumber pudo haber cambiado dónde busca sus módulos: comprobar antes de empaquetar.'.format(moduledir))
 endif
 
+# El fragmento que declara el componente. Va al directorio de WirePlumber y no
+# al de configuración del sistema: es lo que trae el paquete, y quien quiera
+# cambiarlo lo hace en /etc o en ~/.config, que le ganan.
+install_data('datos/50-vasak-permisos-de-medios.conf',
+    install_dir: get_option('datadir') / 'wireplumber' / 'wireplumber.conf.d')
+
 subdir('src/permisos-de-medios')
 subdir('pruebas')

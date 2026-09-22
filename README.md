@@ -103,6 +103,28 @@ Las pruebas no necesitan WirePlumber andando ni una sesión: lo que decide algo
 —qué cuenta como cámara, y cómo se lee el instante de arranque— vive aparte del
 enganche, en `camara.c` e `identidad.c`, y el enganche no decide nada.
 
+### Viene apagado
+
+El paquete instala el módulo y un fragmento que lo declara **en `disabled`**.
+Instalarlo no cambia nada todavía, y es a propósito: falta la otra mitad de la
+regla del escritorio — todo lo que se bloquea se tiene que poder desbloquear.
+
+Hoy el módulo niega a quien no tenga una decisión guardada, y una aplicación
+que nunca preguntó no tiene ninguna: no figura en Privacidad y seguridad, así
+que no hay interruptor que mover, y la negación no genera aviso, así que
+tampoco llega la oferta de permitirla. Encenderlo así dejaría la cámara apagada
+para todo el mundo sin nada que diga por qué.
+
+Se enciende con un archivo propio en `/etc/wireplumber/wireplumber.conf.d/`:
+
+```
+wireplumber.profiles = { main = { custom.vasak-permisos-de-medios = required } }
+```
+
+Hay una prueba que comprueba que viaje apagado. Cuando aparezca el aviso en la
+negación —o cuando la pantalla liste a las que no preguntaron— esa prueba se da
+vuelta en el mismo commit que lo encienda.
+
 ### Cargarlo sin instalarlo
 
 `WIREPLUMBER_MODULE_DIR` es el directorio entero, no una ruta de búsqueda, así
