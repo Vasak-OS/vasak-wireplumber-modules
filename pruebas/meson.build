@@ -12,4 +12,4 @@ test('servicio', executable('pruebas-servicio', 'servicio.c',
 test('el-orden-del-enganche', find_program('el-orden-del-enganche.sh'))
 
 # Que el módulo viaje apagado y que el fragmento que lo declara se instale.
-test('viene-apagado', find_program('viene-apagado.sh'))
+test('viene-encendido', find_program('viene-encendido.sh'))

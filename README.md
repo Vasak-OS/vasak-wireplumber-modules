@@ -103,27 +103,34 @@ Las pruebas no necesitan WirePlumber andando ni una sesión: lo que decide algo
 —qué cuenta como cámara, y cómo se lee el instante de arranque— vive aparte del
 enganche, en `camara.c` e `identidad.c`, y el enganche no decide nada.
 
-### Viene apagado
+### Viene encendido, y por qué recién ahora
 
-El paquete instala el módulo y un fragmento que lo declara **en `disabled`**.
-Instalarlo no cambia nada todavía, y es a propósito: falta la otra mitad de la
-regla del escritorio — todo lo que se bloquea se tiene que poder desbloquear.
+El paquete instala el módulo y un fragmento que lo declara **en `required`**,
+así que instalarlo hace cumplir el permiso de cámara.
 
-Hoy el módulo niega a quien no tenga una decisión guardada, y una aplicación
-que nunca preguntó no tiene ninguna: no figura en Privacidad y seguridad, así
-que no hay interruptor que mover, y la negación no genera aviso, así que
-tampoco llega la oferta de permitirla. Encenderlo así dejaría la cámara apagada
-para todo el mundo sin nada que diga por qué.
+Viajó apagado desde que se empaquetó, y no por prudencia genérica: faltaba la
+otra mitad de la regla del escritorio — todo lo que se bloquea se tiene que
+poder desbloquear. El módulo niega a quien no tenga decisión guardada, y una
+aplicación que nunca preguntó no figura en Privacidad y seguridad: no había
+interruptor que mover, y la negación no generaba aviso, así que tampoco llegaba
+la oferta de permitirla.
 
-Se enciende con un archivo propio en `/etc/wireplumber/wireplumber.conf.d/`:
+Desde `vasak-permissions` 0.14.0 esa mitad existe. Una consulta sin decisión
+**anota el intento** —con lo que la aplicación aparece en la pantalla de
+permisos— y **avisa una vez**, en el momento en que la persona sabe qué estaba
+haciendo. Por eso el paquete pide esa versión y no una anterior: contra el
+servicio viejo, esto volvería a bloquear sin decir nada.
+
+Para apagarlo en un equipo, sin desinstalar nada, un archivo propio en
+`/etc/wireplumber/wireplumber.conf.d/`:
 
 ```
-wireplumber.profiles = { main = { custom.vasak-permisos-de-medios = required } }
+wireplumber.profiles = { main = { custom.vasak-permisos-de-medios = disabled } }
 ```
 
-Hay una prueba que comprueba que viaje apagado. Cuando aparezca el aviso en la
-negación —o cuando la pantalla liste a las que no preguntaron— esa prueba se da
-vuelta en el mismo commit que lo encienda.
+Hay una prueba que comprueba que viaje encendido, y que el fragmento documente
+cómo apagarlo. Estuvo al revés a propósito mientras faltaba el aviso, y se dio
+vuelta en el mismo commit que lo encendió.
 
 ### Cargarlo sin instalarlo
 

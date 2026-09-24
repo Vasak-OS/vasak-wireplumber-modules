@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Que el módulo viaje en el paquete **apagado**, y que el fragmento que lo
+# Que el módulo viaje en el paquete **encendido**, y que el fragmento que lo
 # declara se instale.
 #
 # Las dos mitades importan y ninguna sola alcanza:
@@ -8,17 +8,18 @@
 #   · Un fragmento que no se instala deja el módulo en el disco y sin cargar
 #     nunca, y nada lo dice. A este taller ya le pasó con un drop-in de GRUB
 #     que estuvo escrito y sin empaquetar durante meses.
-#   · Un fragmento que se instala **encendido** apaga la cámara de todo el
-#     equipo, porque una aplicación que nunca preguntó no tiene decisión
-#     guardada y el módulo niega. Y como no figura en Privacidad y seguridad,
-#     no hay interruptor que mover ni aviso que lo ofrezca: sería bloquear sin
-#     poder desbloquear, que es lo que el escritorio no hace.
+#   · Un fragmento que se instala **apagado** deja el permiso de cámara sin
+#     hacer cumplir, y desde afuera se ve exactamente igual que uno que
+#     funciona: la pantalla de Privacidad muestra los interruptores, la persona
+#     los mueve, y no gobiernan nada. Es la mentira que este módulo existe para
+#     no contar.
 #
-# Cuando eso se arregle —aviso en la negación, o la pantalla listando a las que
-# no preguntaron— esta prueba se da vuelta a propósito, en el mismo commit que
-# lo encienda.
+# Esta prueba estaba al revés hasta `vasak-permissions` 0.14.0, y a propósito:
+# mientras una negación no generara aviso ni dejara a la aplicación listada,
+# encenderlo era bloquear sin poder desbloquear. Se dio vuelta en el mismo
+# commit que lo encendió, que es como estaba previsto.
 #
-# Uso: pruebas/viene-apagado.sh
+# Uso: pruebas/viene-encendido.sh
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 1
@@ -60,12 +61,21 @@ fi
 
 # Lo que decide si está encendido o no.
 perfil=$(sed -n '/wireplumber.profiles/,/^}/p' "$FRAGMENTO")
-if grep -qE 'custom\.vasak-permisos-de-medios\s*=\s*disabled' <<<"$perfil"; then
-    ok "y viene apagado en el perfil"
-elif grep -qE 'custom\.vasak-permisos-de-medios\s*=\s*(required|optional)' <<<"$perfil"; then
-    mal "viene ENCENDIDO: apagaría la cámara del equipo sin forma de volver a encenderla"
+if grep -qE 'custom\.vasak-permisos-de-medios\s*=\s*required' <<<"$perfil"; then
+    ok "y viene encendido en el perfil"
+elif grep -qE 'custom\.vasak-permisos-de-medios\s*=\s*(disabled|optional)' <<<"$perfil"; then
+    mal "viene APAGADO u opcional: el permiso de cámara no se haría cumplir y la pantalla de Privacidad prometería de más"
 else
     mal "el perfil no dice nada sobre el componente: no se sabe si carga"
+fi
+
+# Y que quede escrito cómo apagarlo. Un permiso que se hace cumplir sin salida
+# de emergencia documentada se termina apagando a los golpes —desinstalando el
+# paquete— y ahí se va también lo que sí servía.
+if grep -qE 'custom\.vasak-permisos-de-medios\s*=\s*disabled' "$FRAGMENTO"; then
+    ok "y el propio fragmento dice cómo apagarlo en un equipo"
+else
+    mal "el fragmento no documenta cómo apagarlo"
 fi
 
 # Y que el nombre del módulo coincida con el que compila meson. Son dos
