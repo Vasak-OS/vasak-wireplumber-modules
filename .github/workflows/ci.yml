@@ -9,12 +9,14 @@
 # contenedor de Arch en cada corrida. El módulo se compila al armar el paquete,
 # que es donde esa dependencia ya está. No se deja un paso que lo intente y se
 # perdone si falla: un paso que no puede fallar no comprueba nada y hace creer
-# que sí.
+# que sí. Hay una excepción a esta regla, y está escrita donde está el paso:
+# el de cobertura, que es lo único que este workflow sube y por lo tanto no
+# puede dejar de subir.
 #
-# Lo que sí se comprueba es lo único que decide algo: `camara.c` e
-# `identidad.c`. Están separados del enganche con WirePlumber justamente para
-# esto — no incluyen ni un encabezado de `wp/`, así que compilan y corren con
-# glib pelado.
+# Lo que sí se comprueba es lo único que decide algo: `camara.c`,
+# `identidad.c` y `servicio.c`. Están separados del enganche con WirePlumber
+# justamente para esto — no incluyen ni un encabezado de `wp/`, así que compilan
+# y corren con glib pelado.
 name: CI
 
 on:
@@ -38,7 +40,7 @@ jobs:
       - name: Compilar y correr las pruebas
         run: |
           set -e
-          for prueba in identidad camara; do
+          for prueba in identidad camara servicio; do
             gcc -std=c11 -Wall -Wextra -Werror \
               $(pkg-config --cflags glib-2.0) \
               -I src/permisos-de-medios \
@@ -46,6 +48,248 @@ jobs:
               "pruebas/$prueba.c" \
               src/permisos-de-medios/camara.c \
               src/permisos-de-medios/identidad.c \
+              src/permisos-de-medios/servicio.c \
               $(pkg-config --libs glib-2.0)
             "./pruebas-$prueba"
           done
+
+  # ── SonarQube Cloud ──────────────────────────────────────────────────────
+  #
+  # Este es el trabajo que faltaba, y falta por una razón que ya está escrita
+  # arriba: este repositorio no llama al workflow compartido, así que tampoco
+  # heredaba su `sonar`. Lo que pasó es que el análisis quedó congelado el 24 de
+  # septiembre con doce hallazgos en el panel que ya estaban arreglados en
+  # `main` —seguían ahí no porque estuvieran abiertos, sino porque nada volvía
+  # a leer el repositorio—. Este trabajo es lo que los va a cerrar.
+  #
+  # Sin `SONAR_TOKEN` se saltea y lo dice, en vez de fallar: un PR desde un fork
+  # no recibe secretos.
+  #
+  # `modulo.c` no se compila acá, ni se compila en ninguna parte de este
+  # workflow, y no es una omisión: necesita los encabezados de WirePlumber 0.5,
+  # que no existen en los repositorios de Ubuntu. Queda fuera de la cobertura,
+  # y por eso cualquier cambio suyo va a Reprobar la puerta de código nuevo
+  # mientras siga sin pruebas. Es un dato, no un error: la cobertura dice la
+  # verdad sobre lo que está probado.
+  sonar:
+    runs-on: ubuntu-latest
+    # Lo único que hace esto es leer el repositorio y mandar el análisis. No
+    # comenta, no etiqueta, no publica.
+    permissions:
+      contents: read
+    steps:
+      - name: Hay token
+        id: token
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then
+            echo "hay=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Sin SONAR_TOKEN: se saltea el análisis. Hay que pasarlo en «secrets»."
+          fi
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        if: steps.token.outputs.hay == 'true'
+        with:
+          persist-credentials: false
+          # Sonar asigna cada línea a su commit para saber qué es código nuevo,
+          # y para eso necesita el historial entero.
+          fetch-depth: 0
+
+      - name: Instalar glib
+        if: steps.token.outputs.hay == 'true'
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
+
+      # ── La cobertura ─────────────────────────────────────────────────────
+      #
+      # Va en este trabajo y no en `pruebas` por lo mismo que va aparte en el
+      # workflow compartido: las reglas de `main` de este repositorio exigen
+      # `pruebas` y nada más, así que un problema de cobertura acá no puede
+      # frenar un merge. Cuesta correr las pruebas dos veces, en paralelo.
+      #
+      # glib pelado alcanza: los tres archivos que se compilan acá no incluyen ni
+      # un encabezado de `wp/`, que es la razón por la que `modulo.c` queda
+      # afuera. Son los mismos tres que compila `pruebas`.
+      #
+      # ── Por qué este paso no puede cortar la corrida ─────────────────────
+      #
+      # Arriba, en la cabeza de este archivo, está escrito que «un paso que no
+      # puede fallar no comprueba nada y hace creer que sí». Este paso es
+      # deliberadamente la excepción, y la razón es que el modo de falla está
+      # al revés.
+      #
+      # Aquello protege una comprobación: si se traga un fallo, algo roto pasa
+      # por verificado, y eso es un falso verde. Acá, en cambio, un fallo duro
+      # en la cobertura significa que **no hay análisis**, y la ausencia de
+      # análisis es exactamente la ceguera que este PR vino a arreglar: es lo
+      # que dejó los doce hallazgos dos días en el panel después de estar
+      # arreglados. Un paso de cobertura que puede tumbar el análisis se sabotea
+      # a sí mismo.
+      #
+      # Lo que este paso sí hace es no mentir: si gcovr no está, si falla, o si
+      # el informe no nombra ningún archivo de producción, avisa con un
+      # `::warning::` que lo dice de frente y sigue. Y avisa *antes* de seguir,
+      # no después. La diferencia entre esto y un verde falso es que el verde
+      # falso no dice nada.
+      #
+      # La cobertura, además, no es el objeto del trabajo: el objeto es el
+      # análisis. Lo que la cobertura compra es que la puerta pueda cerrarse
+      # alguna vez, y eso se cierra con pruebas nuevas, no con un paso más
+      # estricto.
+      - name: Cobertura
+        if: steps.token.outputs.hay == 'true'
+        run: |
+          # Sin `set -e`, y a propósito: ver la nota de arriba.
+          set -uo pipefail
+
+          destino=build/cobertura
+          rm -rf "$destino"
+          mkdir -p "$destino"
+          problemas=0
+
+          for prueba in identidad camara servicio; do
+            dir="$destino/$prueba"
+            mkdir -p "$dir"
+
+            # Un subdirectorio por prueba y un objeto por archivo, en vez de un
+            # binario por prueba. Las dos cosas importan y las dos son invisibles
+            # mientras no se pida cobertura.
+            #
+            # El subdirectorio, porque las tres pruebas compilan los mismos tres
+            # fuentes: juntos en un directorio, los `.gcda` de una pisan los de
+            # otra y gcov dice «no coincide la marca con el fichero de notas».
+            #
+            # El objeto por archivo, porque `pruebas/camara.c` y
+            # `src/permisos-de-medios/camara.c` se llaman igual —los tres pares se
+            # llaman igual— y gcc deriva el nombre del `.gcno` del nombre del
+            # archivo. Los dos caían en `pruebas-camara-camara.gcno`, el segundo
+            # pisaba al primero, y gcov reportaba 0% para todo sin decir por
+            # qué. Compilando por separado los nombres ya no se chocan.
+            #
+            # `--coverage` tiene que estar en la compilación **y** en el enlazado:
+            # sin él en el enlazado no queda nada que ejecute el contador.
+            gcc -std=c11 -Wall -Wextra -Werror --coverage \
+              $(pkg-config --cflags glib-2.0) \
+              -I src/permisos-de-medios \
+              -c -o "$dir/pruebas-$prueba.o" "pruebas/$prueba.c" || problemas=1
+            for fuente in camara identidad servicio; do
+              gcc -std=c11 -Wall -Wextra -Werror --coverage \
+                $(pkg-config --cflags glib-2.0) \
+                -I src/permisos-de-medios \
+                -c -o "$dir/$fuente.o" "src/permisos-de-medios/$fuente.c" || problemas=1
+            done
+            gcc --coverage -o "$dir/pruebas-$prueba" "$dir"/*.o \
+              $(pkg-config --libs glib-2.0) || problemas=1
+            # Si una de las compilaciones falló, el binario puede no existir o
+            # ser de la corrida anterior: correrlo y reportar su cobertura sería
+            # medir algo que no se acaba de compilar.
+            if [ -x "$dir/pruebas-$prueba" ] && [ "$problemas" -eq 0 ]; then
+              "$dir/pruebas-$prueba" || problemas=1
+            fi
+          done
+
+          if [ "$problemas" -ne 0 ]; then
+            echo "::warning::Alguna prueba no compiló o no pasó; la cobertura sale incompleta o no sale. El rojo de las pruebas lo marca el trabajo «pruebas», que es donde corresponde."
+            exit 0
+          fi
+
+          # gcovr clavado a la versión, por lo mismo que las acciones van clavadas
+          # al commit: lo que se baja acá se ejecuta, y `pipx run` es la misma
+          # forma que ya usa el `zizmor` del workflow compartido.
+          #
+          # `--sonarqube` y no `--lcov`: para C no existe
+          # `sonar.cfamily.lcov.reportPaths`. Las propiedades que la familia C
+          # acepta son llvm-cov, vscoveragexml, gcov, bullseye, cobertura y
+          # `sonar.coverageReportPaths`, que es el formato genérico de Sonar y es
+          # lo que usa el ejemplo oficial de SonarSource para gcovr. Con un lcov
+          # y una propiedad inventada, Sonar no habría dicho nada y la cobertura
+          # habría entrado como 0%: verde por la razón equivocada, que es
+          # justamente lo que este trabajo vino a arreglar.
+          #
+          # `--root` y `--object-directory` apuntan al repositorio y a la
+          # carpeta que contiene los subdirectorios de cada prueba. El `--filter`
+          # deja la cobertura de `pruebas/` fuera: los archivos de prueba se
+          # clasifican como prueba y su cobertura no se mira, y contarla acá
+          # sólo agranda el informe.
+          estado=0
+          pipx run gcovr==8.6 \
+            --root . \
+            --object-directory "$destino" \
+            --filter 'src/' \
+            --sonarqube "$destino/coverage.xml" || estado=$?
+
+          if [ "$estado" -ne 0 ]; then
+            echo "::warning::gcovr no pudo terminar (salió con $estado); no hay cobertura que subir. El análisis sigue igual: sin esto la puerta de código nuevo va a Reprobar, y con esto tal vez no."
+            exit 0
+          fi
+
+          # Un `gcovr` cuyo filtro no matchea nada igual escribe un informe
+          # válido y vacío y sale con 0. El archivo está, dice 0% en todas
+          # partes y no dispara ningún error: es peor que no tener informe,
+          # porque parece una medición. Por eso se mira que haya archivos *de
+          # producción* y no solamente que el archivo exista.
+          medidos=$(grep -c 'file path="src/' "$destino/coverage.xml" || true)
+          if [ "$medidos" -eq 0 ]; then
+            echo "::warning::El informe de cobertura no nombra ningún archivo de src/. Es un informe vacío y NO es una medición de 0%: se sube igual, pero la cobertura de este PR no quiere decir nada."
+            exit 0
+          fi
+
+          echo "Cobertura de las fuentes que hoy se compilan (modulo.c queda afuera a propósito):"
+          # Se imprimen los números y no sólo el «se generó»: un paso que dice
+          # que midió sin decir qué midió es el mismo problema del informe
+          # vacío, un renglón más arriba.
+          python3 - "$destino/coverage.xml" <<'RESUMEN'
+          import sys, xml.etree.ElementTree as ET
+          total = cubiertas = 0
+          for f in ET.parse(sys.argv[1]).getroot():
+              lineas = f.findall('lineToCover')
+              ok = sum(1 for l in lineas if l.get('covered') == 'true')
+              total += len(lineas); cubiertas += ok
+              print(f"  {f.get('path')}: {ok}/{len(lineas)}")
+          print(f"  total: {cubiertas}/{total}")
+          RESUMEN
+
+      - name: Análisis
+        if: steps.token.outputs.hay == 'true'
+        uses: SonarSource/sonarqube-scan-action@ba9859eae8dd6bd29e412f25ddbbef3d032000f4 # v8.2.2
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          # La clave del proyecto sigue la forma que usa SonarQube Cloud al
+          # importar desde GitHub, que es la que ya tienen los proyectos de
+          # antes.
+          #
+          # `src` es el código y `pruebas` son las pruebas, dicho explícito acá
+          # en vez de por exclusiones: las pruebas de este repositorio están en
+          # `pruebas/` y no en `tests/`, así que los patrones del workflow
+          # compartido no las alcanzarían. `**/pruebas/**` se comprobó contra las
+          # seis rutas del directorio y las seis entran.
+          #
+          # Declararlas como pruebas no es un detalle: si no, Sonar las cuenta
+          # como código sin probar —nadie prueba las pruebas— y la cobertura del
+          # código nuevo se hunde justo en el PR que más pruebas suma. Los nueve
+          # hallazgos de shell que se arreglaron en `pruebas/*.sh` caen en este
+          # bando: se reclasifican, y es el análisis volviendo a leer `main` lo
+          # que los cierra.
+          #
+          # Un archivo no puede estar en las dos listas, así que `pruebas` va
+          # también en las exclusiones del código. Acá es redundante —`src` ya
+          # no lo alcanza— y se deja igual para que el día que alguien abra
+          # `sonar.sources` a `.` no termine con el mismo archivo en las dos.
+          #
+          # `modulo.c` no se excluye de la cobertura, y es a propósito. Se
+          # podría, y la puerta quedaría más fácil de cerrar, pero eso sería
+          # comprar un verde midiendo menos: el archivo está sin probar y el
+          # informe tiene que decir que está sin probar.
+          #
+          # El informe va en el formato genérico de Sonar y no en lcov, por lo
+          # que dice el paso de cobertura más arriba.
+          args: >
+            -Dsonar.organization=vasakos
+            -Dsonar.projectKey=Vasak-OS_${{ github.event.repository.name }}
+            -Dsonar.sources=src
+            -Dsonar.tests=pruebas
+            -Dsonar.exclusions=**/pruebas/**,**/build/**
+            -Dsonar.test.inclusions=**/pruebas/**
+            -Dsonar.coverageReportPaths=build/cobertura/coverage.xml
