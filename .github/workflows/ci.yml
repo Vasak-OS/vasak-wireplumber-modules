@@ -32,7 +32,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Instalar glib
         run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
@@ -230,6 +230,10 @@ jobs:
           # porque parece una medición. Por eso se mira que haya archivos *de
           # producción* y no solamente que el archivo exista.
           medidos=$(grep -c 'file path="src/' "$destino/coverage.xml" || true)
+          # `|| true` deja a `medidos` vacío si el `grep` falla por sí mismo, y
+          # en bash `[ "" -eq 0 ]` sale con 2 en vez de 0: la guarda no
+          # dispararía justo en el caso que existe para atrapar.
+          medidos=${medidos:-0}
           if [ "$medidos" -eq 0 ]; then
             echo "::warning::El informe de cobertura no nombra ningún archivo de src/. Es un informe vacío y NO es una medición de 0%: se sube igual, pero la cobertura de este PR no quiere decir nada."
             exit 0
