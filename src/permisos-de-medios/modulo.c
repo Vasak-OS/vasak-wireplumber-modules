@@ -202,10 +202,17 @@ al_contestar_el_servicio (GObject *fuente, GAsyncResult *res, gpointer datos)
   g_hash_table_insert (c->self->decisiones, cliente,
                        GUINT_TO_POINTER (decision));
 
-  wp_info ("cámara para '%s': %s", c->nombre,
-           decision == VASAK_DECISION_PERMITIDA     ? "permitida"
-           : decision == VASAK_DECISION_SIN_DECIDIR ? "sin decidir, o sea que no"
-                                                    : "negada");
+  /* La palabra de la decisión, resuelta antes y no en el medio de la llamada.
+   * Anidado, el `?` y el `:` quedaban al final de la línea y la frase se leía
+   * a contraluz; acá se lee como lo que es, la lista de lo que puede pasar. */
+  const gchar *como = "negada";
+  if (decision == VASAK_DECISION_PERMITIDA) {
+    como = "permitida";
+  } else if (decision == VASAK_DECISION_SIN_DECIDIR) {
+    como = "sin decidir, o sea que no";
+  }
+
+  wp_info ("cámara para '%s': %s", c->nombre, como);
 
   /* Recalcular. Sin esto la respuesta queda guardada y no llega al cliente:
    * los permisos se empujan acá, no al leerlos. */

@@ -26,10 +26,17 @@ cd "$(dirname "$0")/.." || exit 1
 
 FRAGMENTO=datos/50-vasak-permisos-de-medios.conf
 fallos=0
-ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; }
-mal() { printf '  \033[31m✗\033[0m %s\n' "$1"; fallos=$((fallos + 1)); }
+# `return 0` explícito, y a propósito: el estado que decide si la prueba pasó
+# es el `exit` del final, que mira `$fallos`, no el que devuelven estas dos.
+# Hoy `ok` ya sale con 0 —el de su `printf`— y `mal` también, porque su última
+# orden es una asignación y una asignación siempre tiene éxito. Devolver 1
+# desde `mal`, que sería lo «correcto» en apariencia, no cambia el resultado de
+# la prueba, pero convierte el estado de la rama en el de un fallo, que es
+# justo lo que estas dos existen para registrar aparte.
+ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; return 0; }
+mal() { printf '  \033[31m✗\033[0m %s\n' "$1"; fallos=$((fallos + 1)); return 0; }
 
-if [ -f "$FRAGMENTO" ]; then
+if [[ -f "$FRAGMENTO" ]]; then
     ok "el fragmento existe"
 else
     mal "falta $FRAGMENTO"
@@ -42,7 +49,7 @@ fi
 # es el delimitador y parte la expresión.
 instala=$(awk -v f="install_data('$FRAGMENTO'" \
     'index($0, f) { dentro = 1 } dentro { print } dentro && /\)/ { exit }' meson.build)
-if [ -n "$instala" ]; then
+if [[ -n "$instala" ]]; then
     ok "y el paquete lo instala"
     if grep -qE "install_dir:.*'wireplumber'.*'wireplumber\.conf\.d'" <<<"$instala"; then
         ok "en el directorio donde WirePlumber los busca"
@@ -88,7 +95,7 @@ else
 fi
 
 printf '\n'
-if [ "$fallos" -eq 0 ]; then
+if [[ "$fallos" -eq 0 ]]; then
     printf '\033[32mSin fallos.\033[0m\n'
 else
     printf '\033[31m%s fallo(s).\033[0m\n' "$fallos"
