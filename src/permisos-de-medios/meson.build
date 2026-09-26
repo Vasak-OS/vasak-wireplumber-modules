@@ -3,6 +3,7 @@
 # servidor andando, ni una sesión.
 decisiones = static_library('decisiones',
     'camara.c',
+    'decisiones.c',
     'identidad.c',
     'servicio.c',
     dependencies: dependency('glib-2.0'),

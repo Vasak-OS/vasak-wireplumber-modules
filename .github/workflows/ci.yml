@@ -14,9 +14,13 @@
 # puede dejar de subir.
 #
 # Lo que sí se comprueba es lo único que decide algo: `camara.c`,
-# `identidad.c` y `servicio.c`. Están separados del enganche con WirePlumber
-# justamente para esto — no incluyen ni un encabezado de `wp/`, así que compilan
-# y corren con glib pelado.
+# `decisiones.c`, `identidad.c` y `servicio.c`. Están separados del enganche con
+# WirePlumber justamente para esto — no incluyen ni un encabezado de `wp/`, así
+# que compilan y corren con glib pelado.
+#
+# La lista de abajo está escrita a mano y ya se apartó una vez de
+# `pruebas/meson.build`. Lo que corresponde es correr `meson test`; mientras tanto
+# está en los dos lados y hay que cambiar en los dos.
 name: CI
 
 on:
@@ -40,13 +44,14 @@ jobs:
       - name: Compilar y correr las pruebas
         run: |
           set -e
-          for prueba in identidad camara servicio; do
+          for prueba in identidad camara servicio decisiones; do
             gcc -std=c11 -Wall -Wextra -Werror \
               $(pkg-config --cflags glib-2.0) \
               -I src/permisos-de-medios \
               -o "pruebas-$prueba" \
               "pruebas/$prueba.c" \
               src/permisos-de-medios/camara.c \
+              src/permisos-de-medios/decisiones.c \
               src/permisos-de-medios/identidad.c \
               src/permisos-de-medios/servicio.c \
               $(pkg-config --libs glib-2.0)
@@ -108,9 +113,9 @@ jobs:
       # `pruebas` y nada más, así que un problema de cobertura acá no puede
       # frenar un merge. Cuesta correr las pruebas dos veces, en paralelo.
       #
-      # glib pelado alcanza: los tres archivos que se compilan acá no incluyen ni
-      # un encabezado de `wp/`, que es la razón por la que `modulo.c` queda
-      # afuera. Son los mismos tres que compila `pruebas`.
+      # glib pelado alcanza: los cuatro archivos que se compilan acá no incluyen
+      # ni un encabezado de `wp/`, que es la razón por la que `modulo.c` queda
+      # afuera. Son los mismos cuatro que compila `pruebas`.
       #
       # ── Por qué este paso no puede cortar la corrida ─────────────────────
       #
@@ -148,7 +153,7 @@ jobs:
           mkdir -p "$destino"
           problemas=0
 
-          for prueba in identidad camara servicio; do
+          for prueba in identidad camara servicio decisiones; do
             dir="$destino/$prueba"
             mkdir -p "$dir"
 
@@ -156,13 +161,14 @@ jobs:
             # binario por prueba. Las dos cosas importan y las dos son invisibles
             # mientras no se pida cobertura.
             #
-            # El subdirectorio, porque las tres pruebas compilan los mismos tres
-            # fuentes: juntos en un directorio, los `.gcda` de una pisan los de
-            # otra y gcov dice «no coincide la marca con el fichero de notas».
+            # El subdirectorio, porque las cuatro pruebas compilan los mismos
+            # cuatro fuentes: juntos en un directorio, los `.gcda` de una pisan
+            # los de otra y gcov dice «no coincide la marca con el fichero de
+            # notas».
             #
             # El objeto por archivo, porque `pruebas/camara.c` y
-            # `src/permisos-de-medios/camara.c` se llaman igual —los tres pares se
-            # llaman igual— y gcc deriva el nombre del `.gcno` del nombre del
+            # `src/permisos-de-medios/camara.c` se llaman igual —los cuatro pares
+            # se llaman igual— y gcc deriva el nombre del `.gcno` del nombre del
             # archivo. Los dos caían en `pruebas-camara-camara.gcno`, el segundo
             # pisaba al primero, y gcov reportaba 0% para todo sin decir por
             # qué. Compilando por separado los nombres ya no se chocan.
@@ -173,7 +179,7 @@ jobs:
               $(pkg-config --cflags glib-2.0) \
               -I src/permisos-de-medios \
               -c -o "$dir/pruebas-$prueba.o" "pruebas/$prueba.c" || problemas=1
-            for fuente in camara identidad servicio; do
+            for fuente in camara decisiones identidad servicio; do
               gcc -std=c11 -Wall -Wextra -Werror --coverage \
                 $(pkg-config --cflags glib-2.0) \
                 -I src/permisos-de-medios \
