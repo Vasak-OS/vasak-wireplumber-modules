@@ -23,12 +23,19 @@ cd "$(dirname "$0")/.." || exit 1
 
 FUENTE=src/permisos-de-medios/modulo.c
 fallos=0
-ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; }
-mal() { printf '  \033[31m✗\033[0m %s\n' "$1"; fallos=$((fallos + 1)); }
+# `return 0` explícito, y a propósito: el estado que decide si la prueba pasó
+# es el `exit` del final, que mira `$fallos`, no el que devuelven estas dos.
+# Hoy `ok` ya sale con 0 —el de su `printf`— y `mal` también, porque su última
+# orden es una asignación y una asignación siempre tiene éxito. Devolver 1
+# desde `mal`, que sería lo «correcto» en apariencia, no cambia el resultado de
+# la prueba, pero convierte el estado de la rama en el de un fallo, que es
+# justo lo que estas dos existen para registrar aparte.
+ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; return 0; }
+mal() { printf '  \033[31m✗\033[0m %s\n' "$1"; fallos=$((fallos + 1)); return 0; }
 
 bloque=$(sed -n '/static const gchar \*antes\[\]/,/NULL };/p' "$FUENTE")
 
-if [ -z "$bloque" ]; then
+if [[ -z "$bloque" ]]; then
     mal "no se encontró la lista de precedencia en $FUENTE"
 else
     for hook in client/find-default-access client/apply-access; do
@@ -50,7 +57,7 @@ else
 fi
 
 printf '\n'
-if [ "$fallos" -eq 0 ]; then
+if [[ "$fallos" -eq 0 ]]; then
     printf '\033[32mSin fallos.\033[0m\n'
 else
     printf '\033[31m%s fallo(s).\033[0m\n' "$fallos"

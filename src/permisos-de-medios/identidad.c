@@ -69,7 +69,13 @@ vasak_medios_inicio_del_proceso (pid_t pid, guint64 *inicio)
 {
   g_return_val_if_fail (inicio != NULL, FALSE);
 
-  g_autofree gchar *ruta = g_strdup_printf ("/proc/%d/stat", (int) pid);
+  /* `const` en el puntero: la ruta no se toca, se lee. Se puede poner porque
+   * `g_autofree` libera por atributo y no por llamada, y por atributo el
+   * compilador acepta el puntero constante —comprobado con gcc y clang, los
+   * dos con `-Werror`—. Escrito a mano como `g_free (ruta)`, en cambio, no
+   * compila: `g_free` toma `gpointer` y descarta el `const`. Que el `free`
+   * siga siendo del atributo, entonces, y no conviene pasarlo a una llamada. */
+  g_autofree const gchar *ruta = g_strdup_printf ("/proc/%d/stat", (int) pid);
   g_autofree gchar *contenido = NULL;
 
   if (!g_file_get_contents (ruta, &contenido, NULL, NULL))

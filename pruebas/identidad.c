@@ -82,7 +82,8 @@ main (void)
 
   printf ("\ny contra un proceso de verdad\n");
   {
-    guint64 a = 0, b = 0;
+    guint64 a = 0;
+    guint64 b = 0;
     gboolean ok1 = vasak_medios_inicio_del_proceso (getpid (), &a);
     gboolean ok2 = vasak_medios_inicio_del_proceso (getpid (), &b);
     /* El mismo proceso tiene que dar siempre el mismo número: es lo que hace
