@@ -4,14 +4,16 @@
 # biome, `vue-tsc`. Este repositorio no tiene nada de eso —es C con meson— y
 # llamarlo sería pedirle que comprobara archivos que no existen.
 #
-# Tampoco se compila el módulo en sí. Necesita los encabezados de WirePlumber
-# 0.5, que no están en los repositorios de Ubuntu, así que hacerlo pediría un
-# contenedor de Arch en cada corrida. El módulo se compila al armar el paquete,
-# que es donde esa dependencia ya está. No se deja un paso que lo intente y se
-# perdone si falla: un paso que no puede fallar no comprueba nada y hace creer
-# que sí. Hay una excepción a esta regla, y está escrita donde está el paso:
-# el de cobertura, que es lo único que este workflow sube y por lo tanto no
-# puede dejar de subir.
+# El módulo en sí —`modulo.c`— sí se compila, pero no en el runner de este
+# workflow: necesita los encabezados de WirePlumber 0.5, y los runners son de
+# Ubuntu. Lo compila el trabajo `compilar-modulo`, dentro de un contenedor de
+# Arch, donde están los de 0.5. Antes no se compilaba en ninguna parte de este
+# workflow y sólo aparecía al armar el paquete, en Arch, por el paquete de
+# Arch: un error de API o de tipo sólo se veía ahí, y a quien le tocara.
+# No se deja un paso que lo intente y se perdone si falla: un paso que no puede
+# fallar no comprueba nada y hace creer que sí. Hay una excepción a esta regla,
+# y está escrita donde está el paso: el de cobertura, que es lo único que este
+# workflow sube y por lo tanto no puede dejar de subir.
 #
 # Lo que sí se comprueba es lo único que decide algo: `camara.c`,
 # `decisiones.c`, `identidad.c` y `servicio.c`. Están separados del enganche con
@@ -58,6 +60,128 @@ jobs:
             "./pruebas-$prueba"
           done
 
+  # ── compilar-modulo ───────────────────────────────────────────────────────
+  #
+  # `modulo.c` es el único archivo de este repositorio que incluye `<wp/wp.h>` y
+  # `<pipewire/permission.h>`, y hasta ahora no lo compilaba ningún trabajo de
+  # este workflow. Es la mitad del módulo: los otros cuatro archivos **deciden**,
+  # están probados y compilan con glib pelado; éste es el que los engancha al
+  # gestor de permisos de WirePlumber. Un error de API, una firma que cambió, un
+  # tipo — nada de eso lo veía nadie hasta que alguien armaba el paquete en Arch.
+  #
+  # ── Por qué un contenedor de Arch y no un rodeo en Ubuntu ────────────────
+  #
+  # Porque no hay rodeo. La API que usa el módulo es la 0.5, y en `noble` —en
+  # `main` y en `universe`— `apt` sólo ofrece `libwireplumber-0.4-dev`.
+  # Compilar contra 0.4 sería compilar contra una versión que este módulo no usa
+  # y no decir nada sobre la que sí usa, que es peor que no compilar: verde por
+  # la versión equivocada. Arch trae 0.5, así que la dependencia se resuelve en
+  # vez de esquivarse, y lo que se compila acá son los encabezados contra los
+  # que se empaqueta.
+  #
+  # El contenedor corre en el runner de `ubuntu-latest` y no en una máquina
+  # propia: la imagen es de otra distribución, el runner es el de siempre.
+  #
+  # ── Por qué va aparte y no dentro de `pruebas` ────────────────────────────
+  #
+  # Por la misma razón que la cobertura va en su propio trabajo, y está escrita
+  # más abajo en este archivo: las reglas de `main` de este repositorio exigen
+  # `pruebas` y nada más. Un problema acá —que una imagen de Arch se mueva, que
+  # un paquete cambie de nombre, que aparezca una advertencia nueva— no puede
+  # frenar un merge, porque este trabajo no es una puerta. Ese es también el
+  # riesgo que se acepta: si este trabajo se rompe, nadie se entera hasta que
+  # vuelve a compilar, y sólo se entera quien mire.
+  #
+  # ── Qué NO es esto ────────────────────────────────────────────────────────
+  #
+  # No mide nada. Compilar no es ejecutar, y acá no hay ni un PipeWire ni una
+  # sesión: `modulo.c` sigue con 0% de cobertura y va a seguir con 0%, y eso no
+  # lo cambia este trabajo. Por lo tanto no compila con `--coverage`, no sube
+  # ningún informe y no está en ninguna propiedad de Sonar: un trabajo llamado
+  # como la cobertura que reporta 0% sería peor que no tener trabajo, por la
+  # misma razón que el paso de cobertura no deja pasar un informe vacío como si
+  # fuera una medición. Lo que compra es más angosto y es real: **el módulo
+  # compila contra la versión de WirePlumber con la que se despacha, en cada PR**,
+  # y no sólo cuando alguien empaqueta.
+  #
+  # ── `meson`, y no otro bucle de gcc ───────────────────────────────────────
+  #
+  # `meson setup` y `meson compile` sobre el `meson.build` de la raíz, que es el
+  # que arma el `shared_module` de verdad desde `modulo.c` y resuelve
+  # `decisiones_dep` y la dependencia `wireplumber-0.5`. El trabajo `pruebas`
+  # compila con un `for` escrito a mano que ya se apartó una vez de
+  # `pruebas/meson.build`; agregar un tercer camino para armar el mismo módulo
+  # sería el mismo error por tercera vez. Lo que este trabajo agrega no es una
+  # forma de compilar, es un sistema donde compilar.
+  #
+  # `-Dwerror=true` es la opción de meson que pasa `-Werror`, y `-Wall -Wextra`
+  # ya vienen de `warning_level=2` en el `meson.build` de la raíz: la línea que
+  # compila `modulo.c` queda con los mismos `-Wall -Wextra -Werror` que usa
+  # `pruebas`, y no uno más flojo. Que este archivo nunca se había sostenido a
+  # ese estándar no es razón para bajarlo; si aparece una advertencia, es un
+  # hallazgo y se arregla, no se silencia.
+  compilar-modulo:
+    runs-on: ubuntu-latest
+    container: archlinux
+    # Sólo lectura: clona e instala paquetes en un contenedor efímero. No
+    # comenta, no etiqueta, no publica.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Instalar lo que meson necesita
+        run: |
+          set -e
+          # La imagen `archlinux` es pelada: no trae compilador, ni meson, ni
+          # pkg-config, ni los encabezados. Se instala lo mínimo, y cada
+          # paquete está acá por una razón:
+          #
+          #  · `gcc` — el compilador. No viene en la imagen.
+          #  · `meson`, `ninja`, `pkgconf` — el sistema de compilación y el
+          #    que resuelve los `.pc`. `meson` depende de `ninja`, pero se
+          #    nombra igual: que funcione por una dependencia transitiva es
+          #    frágil y no dice qué necesita este trabajo.
+          #  · `libwireplumber` — los encabezados de 0.5 y el
+          #    `wireplumber-0.5.pc`. **No** `wireplumber`: ese paquete trae
+          #    el daemon, lua, systemd y pipewire, y el módulo no usa nada de
+          #    eso. Los encabezados están en el que dice «lib».
+          #  · `glib2` — los encabezados y el `glib-2.0.pc` que necesita la
+          #    biblioteca estática `decisiones`, que sí es parte del módulo.
+          #    `libwireplumber` no lo trae: depende de las bibliotecas
+          #    compartidas de glib, no de las de desarrollo.
+          #
+          # `-Syu` y no `-Sy`: con la base de datos de una imagen que envejece,
+          # instalar sin actualizar primero es una actualización parcial, que
+          # no está soportada y falla de maneras que no dicen nada de este
+          # repositorio. Cuesta unos segundos más por corrida y evita que un
+          # redibujo de la imagen rompa el trabajo.
+          pacman -Syu --noconfirm --needed \
+            gcc meson ninja pkgconf glib2 libwireplumber
+
+      - name: Compilar el módulo
+        run: |
+          set -e
+          # Va a aparecer un WARNING de meson diciendo que no existe
+          # `/usr/lib/wireplumber-0.5`. Es lo esperado acá y no es un fallo:
+          # `meson.build` avisa cuando el directorio de módulos no está, y
+          # `/usr/lib/wireplumber-0.5` lo crea el paquete `wireplumber`, que
+          # este contenedor no instala a propósito. `meson setup` sale con 0
+          # igual, y el aviso se deja ver en vez de taparlo: instalar
+          # `wireplumber` para callar un warning sería meter el daemon entero
+          # en el contenedor para curar una línea de log.
+          meson setup build -Dwerror=true
+          meson compile -C build
+
+      # Las seis pruebas no dependen de WirePlumber y ya las corre `pruebas`, así
+      # que no son el objeto de este trabajo y no se las corre dos veces para
+      # fingir que se midió algo. Salen gratis porque `meson compile` ya las
+      # construyó, y lo que miran es que el `meson.build` que usa este trabajo
+      # siga construyendo las que el `for` de `pruebas` no construye: el mismo
+      # archivo que ya se apartó una vez de esa lista escrita a mano.
+      - name: Las pruebas de meson, de paso
+        run: meson test -C build
+
   # ── SonarQube Cloud ──────────────────────────────────────────────────────
   #
   # Este es el trabajo que faltaba, y falta por una razón que ya está escrita
@@ -70,12 +194,14 @@ jobs:
   # Sin `SONAR_TOKEN` se saltea y lo dice, en vez de fallar: un PR desde un fork
   # no recibe secretos.
   #
-  # `modulo.c` no se compila acá, ni se compila en ninguna parte de este
-  # workflow, y no es una omisión: necesita los encabezados de WirePlumber 0.5,
-  # que no existen en los repositorios de Ubuntu. Queda fuera de la cobertura,
-  # y por eso cualquier cambio suyo va a Reprobar la puerta de código nuevo
-  # mientras siga sin pruebas. Es un dato, no un error: la cobertura dice la
-  # verdad sobre lo que está probado.
+  # `modulo.c` no se compila acá, y no es una omisión: necesita los encabezados
+  # de WirePlumber 0.5, que no existen en los repositorios de Ubuntu. Los
+  # compila el trabajo `compilar-modulo`, dentro de un contenedor de Arch, pero
+  # **compilar no es medir**: de acá sigue sin salir cobertura suya y la
+  # cobertura honesta de ese archivo sigue siendo 0%. Queda fuera de la
+  # cobertura, y por eso cualquier cambio suyo va a Reprobar la puerta de
+  # código nuevo mientras siga sin pruebas. Es un dato, no un error: la
+  # cobertura dice la verdad sobre lo que está probado.
   sonar:
     runs-on: ubuntu-latest
     # Lo único que hace esto es leer el repositorio y mandar el análisis. No
