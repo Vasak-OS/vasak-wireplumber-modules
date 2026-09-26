@@ -7,6 +7,11 @@ test('camara', executable('pruebas-camara', 'camara.c',
 test('servicio', executable('pruebas-servicio', 'servicio.c',
     dependencies: decisiones_dep, install: false))
 
+# La tabla de decisiones: la línea que decide si un cliente tiene cámara. Va
+# después de las otras porque es la que más importa, no porque dependa de ellas.
+test('decisiones', executable('pruebas-decisiones', 'decisiones.c',
+    dependencies: decisiones_dep, install: false))
+
 # El orden de los enganches. No lo ve el compilador, y cuando está mal el
 # módulo no niega nada **y no se queja**.
 test('el-orden-del-enganche', find_program('el-orden-del-enganche.sh'))

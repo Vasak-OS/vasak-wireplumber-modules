@@ -43,6 +43,7 @@
  */
 
 #include "camara.h"
+#include "decisiones.h"
 #include "identidad.h"
 #include "servicio.h"
 
@@ -65,9 +66,10 @@ struct _VasakPermisosMedios
   WpEventHook *enganche;
   WpPermissionManager *gestor;
   GDBusConnection *bus;
-  /* id del cliente -> VasakDecision. Lo que no está es cero, que es NEGADA:
-   * un cliente del que todavía no sabemos nada no tiene la cámara. */
-  GHashTable *decisiones;
+  /* Las decisiones, en `decisiones.c`. Se le pasa el **objeto** cliente y
+   * nunca su id: la razón de por qué, larga, está en el encabezado de esa
+   * unidad, y conviene tenerla a mano antes de cambiar nada acá. */
+  VasakMediosDecisiones *decisiones;
   /* Consultas que llegaron antes que el bus del sistema. */
   GPtrArray *pendientes;
   GCancellable *cancelable;
@@ -83,7 +85,7 @@ G_DEFINE_TYPE (VasakPermisosMedios, vasak_permisos_medios, WP_TYPE_PLUGIN)
 static void
 vasak_permisos_medios_init (VasakPermisosMedios *self)
 {
-  self->decisiones = g_hash_table_new (g_direct_hash, g_direct_equal);
+  self->decisiones = vasak_medios_decisiones_nueva ();
   self->pendientes = g_ptr_array_new_with_free_func ((GDestroyNotify) consulta_libre);
   self->cancelable = g_cancellable_new ();
 }
@@ -117,29 +119,24 @@ permisos_sobre (WpPermissionManager *gestor, WpClient *cliente,
     return por_omision;
 
   /*
-   * La identidad es **el objeto cliente**, no su id.
+   * La decisión está en `decisiones.c`, que es la parte de este módulo que
+   * decide y la única que se puede probar sin un servidor de PipeWire
+   * andando. Acá sólo se le pasa el **objeto cliente** —nunca su id, aunque
+   * indexar por id parezca más prolijo— y se le devuelve lo que hay que darle.
    *
-   * Los ids globales de PipeWire se reciclan. Con la tabla indexada por id, y
-   * sin limpiarla cuando el cliente se va, un cliente posterior que recibiera
-   * el mismo número heredaba el «permitida» de otro y se llevaba la cámara.
-   * Es la misma trampa que el servicio de permisos evita fijando el pid, un
-   * piso más arriba, y acá estaba reintroducida — la marcó CodeRabbit en el
-   * PR #1.
-   *
-   * Indexar por el puntero del objeto lo cierra sólo si la entrada se borra
-   * cuando el objeto muere, porque un puntero liberado también se reutiliza.
-   * De eso se ocupa `al_morir_el_cliente()`, enganchado con
+   * Por qué el objeto y no el id está escrito ahí, con la longitud que
+   * merece: los ids globales de PipeWire se reciclan, y una entrada que no se
+   * borra cuando el cliente se va la hereda el siguiente que reciba ese número.
+   * Ese borrado lo hace `al_morir_el_cliente()`, enganchado con
    * `g_object_weak_ref` en el mismo momento en que se adjunta el gestor.
+   *
+   * Y lo que se devuelve: `por_omision` sólo si la decisión guardada es
+   * `PERMITIDA`, y cero en los demás casos —la consulta todavía en vuelo, la
+   * que falló, y la que nunca llegó a preguntarse—. Mientras no sepamos que
+   * sí, es que no.
    */
-  gpointer guardada = g_hash_table_lookup (self->decisiones, cliente);
-
-  /* Lo que no está en la tabla vale cero, que es NEGADA. Eso cubre los tres
-   * casos que importan: el cliente cuya consulta todavía no volvió, aquel
-   * cuya consulta falló, y el que nunca llegó a preguntarse. Mientras no
-   * sepamos que sí, es que no. */
-  return (GPOINTER_TO_UINT (guardada) == VASAK_DECISION_PERMITIDA)
-             ? por_omision
-             : 0;
+  return vasak_medios_decisiones_permiso (self->decisiones, cliente,
+                                          por_omision);
 }
 
 /* Lo que hace falta recordar mientras la consulta va y viene.
@@ -199,8 +196,7 @@ al_contestar_el_servicio (GObject *fuente, GAsyncResult *res, gpointer datos)
   g_variant_get (respuesta, "(&s)", &texto);
   VasakDecision decision = vasak_medios_decision_desde_texto (texto);
 
-  g_hash_table_insert (c->self->decisiones, cliente,
-                       GUINT_TO_POINTER (decision));
+  vasak_medios_decisiones_anotar (c->self->decisiones, cliente, decision);
 
   /* La palabra de la decisión, resuelta antes y no en el medio de la llamada.
    * Anidado, el `?` y el `:` quedaban al final de la línea y la frase se leía
@@ -269,7 +265,7 @@ static void
 al_morir_el_cliente (gpointer datos, GObject *muerto)
 {
   VasakPermisosMedios *self = datos;
-  g_hash_table_remove (self->decisiones, muerto);
+  vasak_medios_decisiones_olvidar (self->decisiones, muerto);
 }
 
 /*
@@ -354,12 +350,13 @@ al_seleccionar_acceso (WpEvent *evento, gpointer datos)
 
   /* Entra en la tabla ya negado, y se engancha su muerte para que la entrada
    * no le sobreviva. Las dos cosas acá y no al contestar: entre que se
-   * pregunta y que llega la respuesta el cliente puede irse. */
-  if (!g_hash_table_contains (self->decisiones, cliente)) {
-    g_hash_table_insert (self->decisiones, cliente,
-                         GUINT_TO_POINTER (VASAK_DECISION_NEGADA));
+   * pregunta y que llega la respuesta el cliente puede irse.
+   *
+   * El enganche va con el `TRUE` que devuelve `marcar_negada()`, que es la
+   * misma pregunta que hacía el `contains` de antes pero vivida adentro: sólo
+   * se engancha la referencia débil la primera vez. */
+  if (vasak_medios_decisiones_marcar_negada (self->decisiones, cliente))
     g_object_weak_ref (G_OBJECT (cliente), al_morir_el_cliente, self);
-  }
 
   preguntar_por (self, cliente, nombre, pid, inicio);
 }
@@ -493,7 +490,7 @@ vasak_permisos_medios_disable (WpPlugin *plugin)
   g_clear_object (&self->bus);
   g_clear_object (&self->gestor);
   g_ptr_array_set_size (self->pendientes, 0);
-  g_hash_table_remove_all (self->decisiones);
+  vasak_medios_decisiones_limpiar (self->decisiones);
 
   wp_object_update_features (WP_OBJECT (self), 0, WP_PLUGIN_FEATURE_ENABLED);
 }
