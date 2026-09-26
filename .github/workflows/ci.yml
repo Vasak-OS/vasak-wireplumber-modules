@@ -190,7 +190,14 @@ jobs:
           done
 
           if [ "$problemas" -ne 0 ]; then
-            echo "::warning::Alguna prueba no compiló o no pasó; la cobertura sale incompleta o no sale. El rojo de las pruebas lo marca el trabajo «pruebas», que es donde corresponde."
+            # Que el archivo exista aunque esté vacío. Un informe que falta y
+            # un informe vacío dan lo mismo en el panel —0%— pero el vacío al
+            # menos es un archivo que se puede ver, y acá el paso decide dejar
+            # uno para que la causa quede a la vista en vez de ser un 0% que
+            # parece una medición. El 0% sigue siendo la cifra honesta: no se
+            # midió nada porque no se pudo medir.
+            printf "<?xml version='1.0' encoding='utf-8'?>\n<coverage version=\"1\"/>\n" > "$destino/coverage.xml"
+            echo "::warning::Alguna prueba no compiló o no pasó; la cobertura sale incompleta o no sale. El rojo de las pruebas lo marca el trabajo «pruebas», que es donde corresponde. Sonar va a ver 0% de cobertura, y ese 0% no es una medición."
             exit 0
           fi
 
@@ -220,7 +227,11 @@ jobs:
             --sonarqube "$destino/coverage.xml" || estado=$?
 
           if [ "$estado" -ne 0 ]; then
-            echo "::warning::gcovr no pudo terminar (salió con $estado); no hay cobertura que subir. El análisis sigue igual: sin esto la puerta de código nuevo va a Reprobar, y con esto tal vez no."
+            # Mismo criterio que arriba: el archivo se escribe igual, vacío, para
+            # que lo que Sonar encuentre no sea un 0% sin explicación sino un 0%
+            # con un archivo a la vista y un aviso que lo dice de frente.
+            printf "<?xml version='1.0' encoding='utf-8'?>\n<coverage version=\"1\"/>\n" > "$destino/coverage.xml"
+            echo "::warning::gcovr no pudo terminar (salió con $estado); no hay cobertura que subir. El análisis sigue igual: sin esto la puerta de código nuevo va a Reprobar, y con esto tal vez no. Sonar va a ver 0% de cobertura, y ese 0% no es una medición."
             exit 0
           fi
 
