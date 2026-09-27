@@ -14,12 +14,13 @@
 #define VASAK_SERVICIO   "ar.net.vasak.os.Permissions"
 #define VASAK_RUTA       "/ar/net/vasak/os/Permissions"
 #define VASAK_INTERFAZ   "ar.net.vasak.os.Permissions"
-#define VASAK_METODO     "QueryPermissionFor"
+#define VASAK_METODO_QUERY     "QueryPermissionFor"
+#define VASAK_METODO_CHECK     "CheckPermissionFor"
 
 /* El identificador del recurso, tal como se guarda en la política en disco. */
 #define VASAK_RECURSO_CAMARA "camera"
 
-/** Lo que el servicio contesta. */
+/** Lo que el servicio contesta para `QueryPermissionFor`. */
 typedef enum {
   /* Negado, y también todo lo que no se entienda: el orden importa porque el
    * cero es el estado inicial de la tabla. Un cliente del que todavía no
@@ -32,11 +33,25 @@ typedef enum {
   VASAK_DECISION_SIN_DECIDIR,
 } VasakDecision;
 
+/** Lo que el servicio contesta para `CheckPermissionFor`. */
+typedef enum {
+  VASAK_CHECK_NEGADA = 0,
+  VASAK_CHECK_PERMITIDA,
+} VasakCheckDecision;
+
 /**
- * Traduce la respuesta del servicio.
+ * Traduce la respuesta de `QueryPermissionFor`.
  *
  * Todo lo que no sea exactamente `allowed` es negado, incluido `NULL` y
  * cualquier cadena futura que este módulo no conozca. Aparte para poder
  * probarlo: es la línea donde un error se convierte en «pasá».
  */
 VasakDecision vasak_medios_decision_desde_texto (const gchar *texto);
+
+/**
+ * Traduce la respuesta de `CheckPermissionFor`.
+ *
+ * El servicio responde `true`/`false` (booleano). Cualquier error se trata
+ * como negado.
+ */
+VasakCheckDecision vasak_medios_check_desde_booleano (gboolean valor);
