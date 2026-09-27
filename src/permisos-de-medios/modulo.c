@@ -152,6 +152,8 @@ struct _Consulta
   gchar *nombre;
   pid_t pid;
   guint64 inicio;
+  gchar *recurso;
+  gchar *detalle;
 };
 
 static void
@@ -160,6 +162,8 @@ consulta_libre (Consulta *c)
   g_weak_ref_clear (&c->cliente);
   g_clear_object (&c->self);
   g_free (c->nombre);
+  g_free (c->recurso);
+  g_free (c->detalle);
   g_free (c);
 }
 
@@ -217,10 +221,61 @@ al_contestar_el_servicio (GObject *fuente, GAsyncResult *res, gpointer datos)
 }
 
 static void
+al_contestar_el_servicio_check (GObject *fuente, GAsyncResult *res, gpointer datos)
+{
+  Consulta *c = datos;
+  g_autoptr (GError) error = NULL;
+  g_autoptr (GVariant) respuesta = g_dbus_connection_call_finish (
+      G_DBUS_CONNECTION (fuente), res, &error);
+
+  if (respuesta == NULL) {
+    if (!g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
+      wp_warning ("no se pudo consultar el permiso de '%s' para '%s': %s — "
+                  "queda negado",
+                  c->nombre, "recurso", error->message);
+    consulta_libre (c);
+    return;
+  }
+
+  g_autoptr (WpClient) cliente = g_weak_ref_get (&c->cliente);
+  if (cliente == NULL) {
+    wp_debug ("'%s' se desconectó antes de la respuesta; se descarta",
+              c->nombre);
+    consulta_libre (c);
+    return;
+  }
+
+  gboolean permitido = FALSE;
+  g_variant_get (respuesta, "(b)", &permitido);
+  VasakCheckDecision decision = vasak_medios_check_desde_booleano (permitido);
+
+  g_hash_table_insert (c->self->decisiones, cliente,
+                       GUINT_TO_POINTER (decision));
+
+  wp_info ("permiso para '%s': %s", c->nombre,
+           decision == VASAK_CHECK_PERMITIDA ? "permitido" : "negado");
+
+  wp_permission_manager_update_permissions (c->self->gestor);
+  consulta_libre (c);
+}
+
+static void
+enviar_consulta_check (Consulta *c)
+{
+  g_dbus_connection_call (
+      c->self->bus, VASAK_SERVICIO, VASAK_RUTA, VASAK_INTERFAZ,
+      VASAK_METODO_CHECK,
+      g_variant_new ("(utsu)", (guint32) c->pid, c->inicio,
+                     c->recurso, c->detalle),
+      G_VARIANT_TYPE ("(b)"), G_DBUS_CALL_FLAGS_NONE, -1,
+      c->self->cancelable, al_contestar_el_servicio_check, c);
+}
+
+static void
 enviar_consulta (Consulta *c)
 {
   g_dbus_connection_call (
-      c->self->bus, VASAK_SERVICIO, VASAK_RUTA, VASAK_INTERFAZ, VASAK_METODO,
+      c->self->bus, VASAK_SERVICIO, VASAK_RUTA, VASAK_INTERFAZ, VASAK_METODO_QUERY,
       g_variant_new ("(uts)", (guint32) c->pid, c->inicio,
                      VASAK_RECURSO_CAMARA),
       G_VARIANT_TYPE ("(s)"), G_DBUS_CALL_FLAGS_NONE, -1, c->self->cancelable,
@@ -229,7 +284,8 @@ enviar_consulta (Consulta *c)
 
 static void
 preguntar_por (VasakPermisosMedios *self, WpClient *cliente,
-               const gchar *nombre, pid_t pid, guint64 inicio)
+               const gchar *nombre, pid_t pid, guint64 inicio,
+               const gchar *recurso, const gchar *detalle)
 {
   Consulta *c = g_new0 (Consulta, 1);
   c->self = g_object_ref (self);
@@ -237,6 +293,8 @@ preguntar_por (VasakPermisosMedios *self, WpClient *cliente,
   c->nombre = g_strdup (nombre ? nombre : "?");
   c->pid = pid;
   c->inicio = inicio;
+  c->recurso = g_strdup (recurso ? recurso : VASAK_RECURSO_CAMARA);
+  c->detalle = g_strdup (detalle ? detalle : "");
 
   /*
    * El bus del sistema se pide de forma asíncrona al activarse el módulo, así
@@ -255,7 +313,7 @@ preguntar_por (VasakPermisosMedios *self, WpClient *cliente,
     return;
   }
 
-  enviar_consulta (c);
+  enviar_consulta_check (c);
 }
 
 /* Cuando el cliente se va, su decisión se va con él. Sin esto la tabla crece
@@ -358,7 +416,7 @@ al_seleccionar_acceso (WpEvent *evento, gpointer datos)
   if (vasak_medios_decisiones_marcar_negada (self->decisiones, cliente))
     g_object_weak_ref (G_OBJECT (cliente), al_morir_el_cliente, self);
 
-  preguntar_por (self, cliente, nombre, pid, inicio);
+  preguntar_por (self, cliente, nombre, pid, inicio, VASAK_RECURSO_CAMARA, "");
 }
 
 static void
