@@ -253,7 +253,7 @@ al_contestar_el_servicio_check (GObject *fuente, GAsyncResult *res, gpointer dat
   vasak_medios_decisiones_anotar (c->self->decisiones, cliente, decision);
 
   wp_info ("permiso para '%s': %s", c->nombre,
-           decision == VASAK_CHECK_PERMITIDA ? "permitido" : "negado");
+           decision == VASAK_DECISION_PERMITIDA ? "permitido" : "negado");
 
   wp_permission_manager_update_permissions (c->self->gestor);
   consulta_libre (c);
