@@ -247,10 +247,10 @@ al_contestar_el_servicio_check (GObject *fuente, GAsyncResult *res, gpointer dat
 
   gboolean permitido = FALSE;
   g_variant_get (respuesta, "(b)", &permitido);
-  VasakCheckDecision decision = vasak_medios_check_desde_booleano (permitido);
+  VasakCheckDecision decision_check = vasak_medios_check_desde_booleano (permitido);
+  VasakDecision decision = (VasakDecision) decision_check;
 
-  g_hash_table_insert (c->self->decisiones, cliente,
-                       GUINT_TO_POINTER (decision));
+  vasak_medios_decisiones_anotar (c->self->decisiones, cliente, decision);
 
   wp_info ("permiso para '%s': %s", c->nombre,
            decision == VASAK_CHECK_PERMITIDA ? "permitido" : "negado");
