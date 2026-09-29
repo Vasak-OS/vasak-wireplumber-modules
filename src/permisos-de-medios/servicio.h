@@ -14,13 +14,32 @@
 #define VASAK_SERVICIO   "ar.net.vasak.os.Permissions"
 #define VASAK_RUTA       "/ar/net/vasak/os/Permissions"
 #define VASAK_INTERFAZ   "ar.net.vasak.os.Permissions"
+
+/* El método que consulta. **Este y no otro**: el servicio expone dos, y la
+ * diferencia entre ellos es si el bloqueo avisa o no.
+ *
+ * `QueryPermissionFor` lee la decisión ya guardada y, si no hay ninguna, anota
+ * el intento y avisa una vez. Es lo que hace falta acá, donde el enganche ve a
+ * cada cliente **al conectarse** y no hay nadie mirando: la aplicación queda
+ * listada en Privacidad y seguridad, y hay dónde darle permiso.
+ *
+ * El otro no anota nada: ante una decisión que no conoce abre un diálogo con
+ * `agent::ask()`, y si nadie contesta devuelve un «no» en silencio. Ese camino
+ * es para acciones de la persona, donde el diálogo tiene quién lo conteste; desde
+ * acá cada conexión se volvería una pregunta sin destinatario, que es la forma
+ * de enseñar a conceder sin leer que este servicio existe para evitar.
+ *
+ * Su nombre no se declara acá a propósito: una constante de método que nadie
+ * llama es la forma que tomó el camino de volver a colgarlo. La razón queda
+ * escrita en este comentario, en el del punto de envío de `modulo.c` y en el
+ * `README.md`; y `pruebas/sin-camino-de-dialogo.sh` es lo que impide que
+ * reaparezca. */
 #define VASAK_METODO_QUERY     "QueryPermissionFor"
-#define VASAK_METODO_CHECK     "CheckPermissionFor"
 
 /* El identificador del recurso, tal como se guarda en la política en disco. */
 #define VASAK_RECURSO_CAMARA "camera"
 
-/** Lo que el servicio contesta para `QueryPermissionFor`. */
+/** Lo que el servicio contesta. */
 typedef enum {
   /* Negado, y también todo lo que no se entienda: el orden importa porque el
    * cero es el estado inicial de la tabla. Un cliente del que todavía no
@@ -33,12 +52,6 @@ typedef enum {
   VASAK_DECISION_SIN_DECIDIR,
 } VasakDecision;
 
-/** Lo que el servicio contesta para `CheckPermissionFor`. */
-typedef enum {
-  VASAK_CHECK_NEGADA = 0,
-  VASAK_CHECK_PERMITIDA,
-} VasakCheckDecision;
-
 /**
  * Traduce la respuesta de `QueryPermissionFor`.
  *
@@ -47,11 +60,3 @@ typedef enum {
  * probarlo: es la línea donde un error se convierte en «pasá».
  */
 VasakDecision vasak_medios_decision_desde_texto (const gchar *texto);
-
-/**
- * Traduce la respuesta de `CheckPermissionFor`.
- *
- * El servicio responde `true`/`false` (booleano). Cualquier error se trata
- * como negado.
- */
-VasakCheckDecision vasak_medios_check_desde_booleano (gboolean valor);

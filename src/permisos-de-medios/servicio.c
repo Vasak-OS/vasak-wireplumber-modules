@@ -17,9 +17,3 @@ vasak_medios_decision_desde_texto (const gchar *texto)
    * aceptable entonces es no dar la cámara. */
   return VASAK_DECISION_NEGADA;
 }
-
-VasakCheckDecision
-vasak_medios_check_desde_booleano (gboolean valor)
-{
-  return valor ? VASAK_CHECK_PERMITIDA : VASAK_CHECK_NEGADA;
-}

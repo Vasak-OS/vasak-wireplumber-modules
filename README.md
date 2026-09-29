@@ -45,9 +45,11 @@ hace falta para el instante de arranque del proceso.
 **No resuelve `/proc/<pid>/exe`.** Eso lo hace `vasak-permissions`, como root y
 fijando el pid contra la reutilización, que es exactamente lo que ya hace para
 identificar a quien lo llama. Acá se juntan los dos números que ese servicio
-necesita —pid e instante de arranque— y se le pasan por
-`CheckPermissionFor`. Duplicar la resolución sería una copia que se va a
-separar de la original.
+necesita —pid e instante de arranque— y se le pasan por `QueryPermissionFor`, que
+es el único de los dos métodos que **anota el intento y avisa** cuando todavía no
+hay decisión; el otro abre un diálogo, y de por qué acá no puede haberlo está en
+[«Cuatro trampas que costaron encontrar»](#cuatro-trampas-que-costaron-encontrar).
+Duplicar la resolución sería una copia que se va a separar de la original.
 
 Para eso `/usr/bin/wireplumber` tiene que entrar en `DELEGATE_BINARIES`, en el
 crate del protocolo de `vasak-permissions`. La lista es de rutas absolutas bajo
@@ -69,7 +71,40 @@ La cámara no tiene ese problema —no hay camino de pulse para video— pero el
 micrófono del navegador sí. Hacerlo cumplir es un trabajo dentro de
 `pipewire-pulse`, otro componente y otro problema.
 
-### Tres trampas que costaron encontrar
+### Cuatro trampas que costaron encontrar
+
+**Hay dos métodos para consultar, y el equivocado no rompe la cámara: rompe el
+aviso.** `vasak-permissions` expone `QueryPermissionFor` y `CheckPermissionFor`,
+y los dos dicen lo mismo sobre el permiso —el módulo sigue negando igual, falla
+cerrando, el agujero del socket privilegiado sigue cerrado—. Lo que cambia es
+qué pasa cuando **nadie decidió todavía**, que es el caso de todo cliente nuevo,
+que es el caso constante.
+
+`QueryPermissionFor` llama a `anotar_y_avisar()`: **anota el intento** y **avisa
+una vez**. Con eso la aplicación aparece en Privacidad y seguridad y hay dónde
+darle permiso.
+
+`CheckPermissionFor` no anota nada. Ante una decisión que no conoce abre un
+diálogo con `agent::ask()` y, si nadie contesta, devuelve un «no» en silencio.
+Ese método es para acciones de la persona —«estás compartiendo pantalla, ¿seguí?»—
+, donde el diálogo tiene quién lo conteste. Este módulo en cambio ve a cada
+cliente **al conectarse**: «¿le permitís la cámara a pactl?» no es una pregunta
+que alguien pueda contestar, porque no hay nadie mirando la pantalla de permisos
+en el momento en que arranca el navegador.
+
+El resultado de usar el equivocado es peor que no avisar: bloquea la cámara
+**sin dejar registro**, o sea que la aplicación no figura en ningún lado y no hay
+forma de desbloquearla. Es exactamente el callejón sin salida por el que este
+módulo viajó apagado desde su primer día, y la razón de que el paquete exija
+`vasak-permissions>=0.14.0` es la que acabo de describir. Encendió el método
+equivocado y se apagó la mitad que lo hacía desbloqueable.
+
+Dos pruebas lo atan, y son de fuente a propósito: el enganche vive en
+`modulo.c`, que no compila en CI, así que no hay forma de observarlo desde C.
+`el-metodo-de-la-consulta.sh` comprueba que la cadena que va del enganche a la
+llamada por D-Bus termine en `QueryPermissionFor`, con su firma; y
+`sin-camino-de-dialogo.sh` que el otro no aparezca en ninguna línea de **código**,
+para que no quede ni el camino ni la constante a mano «por si acaso».
 
 **El orden de los enganches se declara entero o no sirve.** Todos los que
 reparten acceso se declaran «antes de `client/apply-access`», así que nombrar
@@ -118,8 +153,10 @@ la oferta de permitirla.
 Desde `vasak-permissions` 0.14.0 esa mitad existe. Una consulta sin decisión
 **anota el intento** —con lo que la aplicación aparece en la pantalla de
 permisos— y **avisa una vez**, en el momento en que la persona sabe qué estaba
-haciendo. Por eso el paquete pide esa versión y no una anterior: contra el
-servicio viejo, esto volvería a bloquear sin decir nada.
+haciendo. Eso es lo que hace falta para que este módulo se pueda encender: sin el
+registro, la aplicación bloqueada no figuraría en Privacidad y seguridad y no
+habría dónde darle permiso. Por eso el paquete pide esa versión y no una
+anterior: contra el servicio viejo, esto volvería a bloquear sin decir nada.
 
 Para apagarlo en un equipo, sin desinstalar nada, un archivo propio en
 `/etc/wireplumber/wireplumber.conf.d/`:
