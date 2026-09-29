@@ -60,6 +60,27 @@ jobs:
             "./pruebas-$prueba"
           done
 
+      # ── Por qué estas corren acá y no sólo en `compilar-modulo` ────────────
+      #
+      # Porque hasta ahora **no bloqueaban nada**. Este trabajo es el único que
+      # las reglas de `main` marcan como puerta, y su bucle de gcc llevaba los
+      # nombres de las pruebas de C escritos a mano. Las de shell —que son las
+      # que miran lo que el compilador no ve: el orden de los enganches, que el
+      # fragmento viaje encendido, y qué método se consulta por D-Bus— sólo
+      # corrían dentro de `compilar-modulo`, que el propio archivo declara que
+      # no es puerta. O sea que un cambio podía reintroducir cualquiera de esos
+      # fallos y el merge pasaba en verde.
+      #
+      # No hace falta glib ni meson para correrlas: son `bash`, `awk` y `grep`
+      # sobre el propio árbol, así que van en el mismo paso que el que ya estaba.
+      - name: Correr las pruebas de shell
+        run: |
+          set -e
+          for prueba in pruebas/*.sh; do
+            echo "── $prueba"
+            "$prueba"
+          done
+
   # ── compilar-modulo ───────────────────────────────────────────────────────
   #
   # `modulo.c` es el único archivo de este repositorio que incluye `<wp/wp.h>` y
