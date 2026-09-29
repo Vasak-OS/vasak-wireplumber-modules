@@ -173,7 +173,7 @@ jobs:
           meson setup build -Dwerror=true
           meson compile -C build
 
-      # Las seis pruebas no dependen de WirePlumber y ya las corre `pruebas`, así
+      # Las ocho pruebas no dependen de WirePlumber y ya las corre `pruebas`, así
       # que no son el objeto de este trabajo y no se las corre dos veces para
       # fingir que se midió algo. Salen gratis porque `meson compile` ya las
       # construyó, y lo que miran es que el `meson.build` que usa este trabajo
