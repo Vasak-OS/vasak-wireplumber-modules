@@ -29,8 +29,14 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 source "$HERE/isolated-session.sh"
 
 fallos=0
+fallidas=()
 ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; return 0; }
-mal() { printf '  \033[31m✗\033[0m %s\n' "$1"; fallos=$((fallos + 1)); return 0; }
+mal() {
+    printf '  \033[31m✗\033[0m %s\n' "$1"
+    fallos=$((fallos + 1))
+    fallidas+=("$1")
+    return 0
+}
 
 eq() {
     gdbus call --session -d org.vasak.Equalizer -o /org/vasak/Equalizer \
@@ -62,9 +68,11 @@ check_link() {
 
 # La ganancia de un control del filtro, leída del propio nodo.
 node_gain() {
-    pw-dump "$(node_id vasak-equalizer)" 2>/dev/null | jq -r --arg c "$1" '
-        .[0].info.params.Props[] | (.params // empty)
-        | select(index($c) != null) | .[index($c) + 1] * 1' | head -n1
+    pw-dump 2>/dev/null | jq -r --arg c "$1" '
+        .[] | select(.type == "PipeWire:Interface:Node"
+                     and .info.props["node.name"] == "vasak-equalizer")
+        | (.info.params.Props // [])[] | (.params // empty)
+        | select(index($c) != null) | .[index($c) + 1] * 1' 2>/dev/null | head -n1
 }
 
 # Espera hasta 3 s a que un control valga lo que se le pidió: `set_param` no
@@ -170,7 +178,16 @@ printf '\n'
 if [[ "$fallos" -eq 0 ]]; then
     printf '\033[32mSin fallos.\033[0m\n'
 else
-    printf '\033[31m%s fallo(s).\033[0m Registros en %s\n' "$fallos" "$ISOLATED_ROOT"
+    # Lo que falló, otra vez y al final: en CI sólo se ven las últimas líneas.
+    printf '\033[31m%s fallo(s):\033[0m\n' "$fallos"
+    printf '  · %s\n' "${fallidas[@]}"
+    echo "── enlaces ahora"
+    links_by_name | sed 's/^/    /'
+    echo "── el registro de WirePlumber, lo último"
+    tail -n 15 "$ISOLATED_ROOT/wireplumber.log" | sed 's/^/    /'
+    echo "── el de PipeWire"
+    tail -n 15 "$ISOLATED_ROOT/pipewire.log" | sed 's/^/    /'
+    printf 'Registros en %s\n' "$ISOLATED_ROOT"
     export ISOLATED_KEEP=1
 fi
 exit $(( fallos > 0 ? 1 : 0 ))
