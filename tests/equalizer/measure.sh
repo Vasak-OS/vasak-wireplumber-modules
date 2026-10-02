@@ -38,14 +38,19 @@ WORK=$(mktemp -d)
 trap 'kill "${PLAYER:-}" 2>/dev/null; isolated_stop; rm -rf "$WORK"' EXIT
 
 eq() {
+    local method=$1
+    shift
     gdbus call --session -d org.vasak.Equalizer -o /org/vasak/Equalizer \
-        -m "org.vasak.Equalizer1.$1" "${@:2}" >/dev/null
+        -m "org.vasak.Equalizer1.$method" "$@" >/dev/null
     sleep 0.5
+    return 0
 }
 
 cpu_ticks() {
+    local pid=$1
     # utime + stime, campos 14 y 15, después del último «)».
-    sed 's/.*) //' "/proc/$1/stat" | awk '{ print $12 + $13 }'
+    sed 's/.*) //' "/proc/$pid/stat" | awk '{ print $12 + $13 }'
+    return 0
 }
 
 echo "carga de la máquina al empezar: $(cut -d' ' -f1-3 /proc/loadavg) ($(nproc) núcleos)"
@@ -106,6 +111,7 @@ PLAYER=$!
 # la ventana de medición, no cuánto vale.
 player_errors() {
     pw-top -b -n 2 2>/dev/null | awk '$NF == "test-player" { e = $9 } END { print e + 0 }'
+    return 0
 }
 
 measure_cpu() {
@@ -120,6 +126,7 @@ measure_cpu() {
     t1=$(cpu_ticks "$ISOLATED_PW_PID")
     e1=$(player_errors)
     python3 -c "print(f'pipewire con el ecualizador $label: {($t1 - $t0) / $(getconf CLK_TCK) / $MEASURE_SECONDS * 100:.2f} % de un núcleo, {$e1 - $e0} xruns del reproductor en {$MEASURE_SECONDS} s')"
+    return 0
 }
 
 eq SetPreset rock

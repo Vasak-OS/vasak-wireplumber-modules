@@ -63,7 +63,7 @@ void vasak_eq_service_unexport (VasakEqService *self);
  * igual y suena cuando el nodo aparezca. */
 void vasak_eq_service_set_available (VasakEqService *self, gboolean available);
 
-const VasakEqState *vasak_eq_service_get_state (VasakEqService *self);
+const VasakEqState *vasak_eq_service_get_state (const VasakEqService *self);
 
 /* Escribe ya lo que esté pendiente. Las pruebas lo usan; el módulo, al
  * apagarse. */

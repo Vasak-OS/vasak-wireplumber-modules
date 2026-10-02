@@ -75,8 +75,9 @@ vasak_eq_preset_id_valid (const gchar *id)
 gboolean
 vasak_eq_gain_valid (gdouble gain)
 {
-  /* `isfinite` antes que el rango: NaN compara falso contra todo, así que
-   * `gain >= MIN && gain <= MAX` lo rechazaría igual, pero por casualidad. */
+  /* `isfinite` antes que el rango: NaN compara falso contra cualquier
+   * número, así que `gain >= MIN && gain <= MAX` lo rechazaría igual, pero
+   * por casualidad. */
   return isfinite (gain) && gain >= VASAK_EQ_GAIN_MIN &&
          gain <= VASAK_EQ_GAIN_MAX;
 }

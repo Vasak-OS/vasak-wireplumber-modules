@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include <errno.h>
+#include <string.h>
 #include <glib/gstdio.h>
 
 #include "state.h"
@@ -75,8 +76,12 @@ vasak_eq_state_save (const VasakEqState *state, const gchar *path,
       NULL);
   g_key_file_set_boolean (file, GROUP, KEY_ENABLED, state->enabled);
   g_key_file_set_string (file, GROUP, KEY_PRESET, state->preset);
-  g_key_file_set_double_list (file, GROUP, KEY_CUSTOM,
-                              (gdouble *) state->custom, VASAK_EQ_BANDS);
+  /* Una copia y no un cast: `g_key_file_set_double_list` pide un puntero sin
+   * `const` aunque no escribe, y sacarle el `const` a `state` sería mentirle
+   * al compilador sobre quién puede tocarlo. */
+  gdouble custom[VASAK_EQ_BANDS];
+  memcpy (custom, state->custom, sizeof custom);
+  g_key_file_set_double_list (file, GROUP, KEY_CUSTOM, custom, VASAK_EQ_BANDS);
 
   g_autofree gchar *dir = g_path_get_dirname (path);
   if (g_mkdir_with_parents (dir, 0700) != 0) {

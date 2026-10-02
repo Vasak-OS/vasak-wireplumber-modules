@@ -65,6 +65,8 @@ G_DEFINE_TYPE (VasakEqualizer, vasak_equalizer, WP_TYPE_PLUGIN)
 static void
 vasak_equalizer_init (VasakEqualizer *self G_GNUC_UNUSED)
 {
+  /* Vacío a propósito: lo que el plugin tiene se arma en `enable` y se
+   * desarma en `disable`, que es la vida que le da WirePlumber. */
 }
 
 static void
@@ -136,7 +138,7 @@ on_object_added (WpObjectManager *om G_GNUC_UNUSED, GObject *object,
   } else {
     return;
   }
-  /* Con cualquiera de los dos que llegue se aplica todo: no hay orden
+  /* Con cualquiera de los dos que llegue se aplica lo entero: no hay orden
    * garantizado entre el nodo y el metadato, y `apply` hace lo que puede con
    * lo que haya. */
   apply (vasak_eq_service_get_state (self->service), self);

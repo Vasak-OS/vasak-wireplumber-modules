@@ -33,10 +33,13 @@ ok()  { printf '  \033[32m✓\033[0m %s\n' "$1"; return 0; }
 mal() { printf '  \033[31m✗\033[0m %s\n' "$1"; fallos=$((fallos + 1)); return 0; }
 
 eq() {
+    local method=$1
+    shift
     gdbus call --session -d org.vasak.Equalizer -o /org/vasak/Equalizer \
-        -m "org.vasak.Equalizer1.$1" "${@:2}" >/dev/null
+        -m "org.vasak.Equalizer1.$method" "$@" >/dev/null
     # Que la política termine de reenganchar, si cambió el encendido.
     sleep 0.5
+    return 0
 }
 
 TONES=$(mktemp -d)
@@ -44,7 +47,8 @@ trap 'isolated_stop; rm -rf "$TONES"' EXIT
 
 # El nivel de un tono de FREQ Hz, grabado del monitor de test-sink-a.
 measure() {
-    local freq=$1 tone="$TONES/$1.raw" rec="$TONES/rec.raw"
+    local freq=$1
+    local tone="$TONES/$freq.raw" rec="$TONES/rec.raw"
     [[ -f $tone ]] || python3 "$HERE/tone.py" gen "$freq" 1.5 "$tone"
     rm -f "$rec"
     pw-record -a --format f32 --rate 48000 --channels 2 \
@@ -60,11 +64,14 @@ measure() {
     sleep 0.2
     kill "$recorder"; wait "$recorder" 2>/dev/null
     python3 "$HERE/tone.py" level "$rec"
+    return $?
 }
 
 # Que dos niveles en dB estén a no más de TOL uno de otro.
 close() {
-    python3 -c "import sys; sys.exit(0 if abs($1 - ($2)) <= $3 else 1)"
+    local a=$1 b=$2 tolerance=$3
+    python3 -c "import sys; sys.exit(0 if abs($a - ($b)) <= $tolerance else 1)"
+    return $?
 }
 
 check() {
@@ -77,6 +84,7 @@ check() {
     else
         mal "$preset en $freq Hz: $got dBFS, y los biquads dan $want"
     fi
+    return 0
 }
 
 isolated_start

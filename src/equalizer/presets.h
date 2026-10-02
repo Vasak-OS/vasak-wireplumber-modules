@@ -20,7 +20,7 @@ G_BEGIN_DECLS
 
 /* El rango que acepta cada banda, en dB. Doce es lo que traen la mayoría de
  * los ecualizadores gráficos, y alcanza de sobra para lo que es corregir unos
- * auriculares; más que eso es pedirle al preamplificador que baje todo otro
+ * auriculares; más que eso es pedirle al preamplificador que baje el resto otro
  * tanto. */
 #define VASAK_EQ_GAIN_MIN (-12.0)
 #define VASAK_EQ_GAIN_MAX (12.0)
@@ -69,7 +69,7 @@ gboolean vasak_eq_gain_valid (gdouble gain);
  * Es lo que evita que subir los graves sature. El grafo trabaja en coma
  * flotante y no recorta, pero la placa de sonido sí, y una canción ya
  * masterizada al máximo con +6 dB en 63 Hz recorta en cada golpe de bombo.
- * Bajar todo lo que suba la banda más alta deja el pico donde estaba.
+ * Bajar el resto tanto como suba la banda más alta deja el pico donde estaba.
  */
 gdouble vasak_eq_preamp (const gdouble gains[VASAK_EQ_BANDS]);
 

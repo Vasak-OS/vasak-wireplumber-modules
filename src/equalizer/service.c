@@ -64,7 +64,7 @@ typedef struct {
 } Snapshot;
 
 static gboolean
-is_saved (VasakEqService *self)
+is_saved (const VasakEqService *self)
 {
   return self->on_disk_known &&
          vasak_eq_state_equal (&self->state, &self->on_disk);
@@ -130,7 +130,8 @@ notify (VasakEqService *self, const Snapshot *before)
     return;
 
   Snapshot now = snapshot (self);
-  gdouble old_gains[VASAK_EQ_BANDS], new_gains[VASAK_EQ_BANDS];
+  gdouble old_gains[VASAK_EQ_BANDS];
+  gdouble new_gains[VASAK_EQ_BANDS];
   vasak_eq_state_gains (&before->state, old_gains);
   vasak_eq_state_gains (&now.state, new_gains);
   gboolean gains_changed = memcmp (old_gains, new_gains, sizeof old_gains) != 0;
@@ -261,8 +262,8 @@ method_call (GDBusConnection *connection G_GNUC_UNUSED,
       return;
     }
   } else {
-    /* `SetEnabled`. GDBus ya rechazó lo que no está en la introspección —un
-     * método desconocido o con otra firma no llega hasta acá—, así que lo
+    /* `SetEnabled`. GDBus ya rechazó lo que no está en la introspección —una
+     * llamada desconocida o con otra firma no llega hasta acá—, así que lo
      * único que queda es este. */
     gboolean enabled;
     g_variant_get (parameters, "(b)", &enabled);
@@ -373,7 +374,7 @@ vasak_eq_service_set_available (VasakEqService *self, gboolean available)
 }
 
 const VasakEqState *
-vasak_eq_service_get_state (VasakEqService *self)
+vasak_eq_service_get_state (const VasakEqService *self)
 {
   return &self->state;
 }

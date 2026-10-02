@@ -110,6 +110,7 @@ EOF
     export WIREPLUMBER_MODULE_DIR=$root/modules
 
     isolated_launch
+    return 0
 }
 
 # Arranca los dos demonios sobre lo que dejó armado `isolated_start`.
@@ -129,6 +130,7 @@ isolated_launch() {
         wpctl inspect @DEFAULT_AUDIO_SINK@ 2>/dev/null | grep -q 'node.name = "test-sink' && break
         sleep 0.05
     done
+    return 0
 }
 
 # Los dos demonios abajo y arriba otra vez, con el mismo estado en disco: es lo
@@ -137,6 +139,7 @@ isolated_restart() {
     kill "$ISOLATED_WP_PID" "$ISOLATED_PW_PID" 2>/dev/null
     wait "$ISOLATED_WP_PID" "$ISOLATED_PW_PID" 2>/dev/null
     isolated_launch
+    return 0
 }
 
 isolated_stop() {
@@ -151,8 +154,10 @@ isolated_stop() {
 
 # El id de un nodo por su `node.name`, o vacío.
 node_id() {
-    pw-dump 2>/dev/null | jq -r --arg n "$1" \
+    local name=$1
+    pw-dump 2>/dev/null | jq -r --arg n "$name" \
         '.[] | select(.type == "PipeWire:Interface:Node" and .info.props["node.name"] == $n) | .id' | head -n1
+    return 0
 }
 
 # Los enlaces como «salida -> entrada», por nombre de nodo, sin repetir canal.
@@ -161,4 +166,5 @@ links_by_name() {
         (map(select(.type == "PipeWire:Interface:Node")) | map({key: (.id|tostring), value: .info.props["node.name"]}) | from_entries) as $n
         | .[] | select(.type == "PipeWire:Interface:Link")
         | "\($n[.info["output-node-id"]|tostring]) -> \($n[.info["input-node-id"]|tostring])"' | sort -u
+    return 0
 }

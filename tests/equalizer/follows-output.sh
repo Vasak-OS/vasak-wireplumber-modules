@@ -39,12 +39,17 @@ mal() {
 }
 
 eq() {
+    local method=$1
+    shift
     gdbus call --session -d org.vasak.Equalizer -o /org/vasak/Equalizer \
-        -m "org.vasak.Equalizer1.$1" "${@:2}" >/dev/null
+        -m "org.vasak.Equalizer1.$method" "$@" >/dev/null
+    return $?
 }
 eq_get() {
+    local property=$1
     gdbus call --session -d org.vasak.Equalizer -o /org/vasak/Equalizer \
-        -m org.freedesktop.DBus.Properties.Get org.vasak.Equalizer1 "$1" 2>/dev/null
+        -m org.freedesktop.DBus.Properties.Get org.vasak.Equalizer1 "$property" 2>/dev/null
+    return $?
 }
 
 # Espera hasta 5 s a que `links_by_name` muestre (o deje de mostrar) un enlace.
@@ -63,28 +68,38 @@ wait_link() {
 }
 
 check_link() {
-    if wait_link "$1" "$2"; then ok "$3"; else mal "$3"; links_by_name | sed 's/^/      /'; fi
+    local want=$1 link=$2 label=$3
+    if wait_link "$want" "$link"; then
+        ok "$label"
+    else
+        mal "$label"
+        links_by_name | sed 's/^/      /'
+    fi
+    return 0
 }
 
 # La ganancia de un control del filtro, leída del propio nodo.
 node_gain() {
-    pw-dump 2>/dev/null | jq -r --arg c "$1" '
+    local control=$1
+    pw-dump 2>/dev/null | jq -r --arg c "$control" '
         .[] | select(.type == "PipeWire:Interface:Node"
                      and .info.props["node.name"] == "vasak-equalizer")
         | (.info.params.Props // [])[] | (.params // empty)
         | select(index($c) != null) | .[index($c) + 1] * 1' 2>/dev/null | head -n1
+    return 0
 }
 
 # Espera hasta 3 s a que un control valga lo que se le pidió: `set_param` no
 # espera respuesta, y el nodo lo toma en su vuelta.
 check_gain() {
-    local got
+    local control=$1 want=$2 label=$3 got
     for _ in $(seq 60); do
-        got=$(node_gain "$1")
-        [[ $got == "$2" ]] && { ok "$3"; return 0; }
+        got=$(node_gain "$control")
+        [[ $got == "$want" ]] && { ok "$label"; return 0; }
         sleep 0.05
     done
-    mal "$3 (vale ${got:-nada})"
+    mal "$label (vale ${got:-nada})"
+    return 0
 }
 
 wait_available() {
@@ -99,6 +114,7 @@ start_player() {
     pw-cat -p -a --format f32 --rate 48000 --channels 2 \
         -P '{ node.name = test-player }' /dev/zero >/dev/null 2>&1 &
     PLAYER=$!
+    return 0
 }
 
 trap 'kill "${PLAYER:-}" 2>/dev/null; isolated_stop' EXIT
