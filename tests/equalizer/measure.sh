@@ -54,7 +54,7 @@ cpu_ticks() {
 }
 
 echo "carga de la máquina al empezar: $(cut -d' ' -f1-3 /proc/loadavg) ($(nproc) núcleos)"
-isolated_start
+isolated_start || { echo "la pila aislada no arrancó; registros en $ISOLATED_ROOT"; export ISOLATED_KEEP=1; exit 1; }
 pw-metadata -n settings 0 clock.force-quantum "$QUANTUM" >/dev/null
 for _ in $(seq 200); do
     gdbus call --session -d org.vasak.Equalizer -o /org/vasak/Equalizer \

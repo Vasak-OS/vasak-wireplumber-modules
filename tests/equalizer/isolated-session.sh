@@ -110,26 +110,41 @@ EOF
     export WIREPLUMBER_MODULE_DIR=$root/modules
 
     isolated_launch
-    return 0
+    return $?
 }
 
-# Arranca los dos demonios sobre lo que dejó armado `isolated_start`.
+# Arranca los dos demonios sobre lo que dejó armado `isolated_start`. Sale
+# con 1 si alguno no llega a estar listo en 10 s, y lo dice: una prueba que
+# siguiera igual fallaría más adelante por un motivo que no es el suyo.
 isolated_launch() {
+    local ready=no
     pipewire >> "$ISOLATED_ROOT/pipewire.log" 2>&1 &
     ISOLATED_PW_PID=$!
-    for _ in $(seq 100); do
-        [[ -S "$ISOLATED_RUN/pipewire-0" ]] && break
+    for _ in $(seq 200); do
+        [[ -S "$ISOLATED_RUN/pipewire-0" ]] && { ready=yes; break; }
         sleep 0.05
     done
+    if [[ $ready == no ]]; then
+        echo "PipeWire aislado no abrió su socket en 10 s" >&2
+        return 1
+    fi
     WIREPLUMBER_DEBUG=${WIREPLUMBER_DEBUG:-2} wireplumber >> "$ISOLATED_ROOT/wireplumber.log" 2>&1 &
     ISOLATED_WP_PID=$!
     # Que WirePlumber haya terminado de activarse: ve las dos salidas y eligió
     # una por omisión. No es estado estable —para medir hay que esperar más,
     # ver `measure.sh`— pero alcanza para mirar enlaces.
+    ready=no
     for _ in $(seq 200); do
-        wpctl inspect @DEFAULT_AUDIO_SINK@ 2>/dev/null | grep -q 'node.name = "test-sink' && break
+        if wpctl inspect @DEFAULT_AUDIO_SINK@ 2>/dev/null | grep -q 'node.name = "test-sink'; then
+            ready=yes
+            break
+        fi
         sleep 0.05
     done
+    if [[ $ready == no ]]; then
+        echo "WirePlumber aislado no eligió una salida por omisión en 10 s" >&2
+        return 1
+    fi
     return 0
 }
 
@@ -139,7 +154,7 @@ isolated_restart() {
     kill "$ISOLATED_WP_PID" "$ISOLATED_PW_PID" 2>/dev/null
     wait "$ISOLATED_WP_PID" "$ISOLATED_PW_PID" 2>/dev/null
     isolated_launch
-    return 0
+    return $?
 }
 
 isolated_stop() {

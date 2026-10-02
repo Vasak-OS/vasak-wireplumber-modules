@@ -79,7 +79,9 @@ check() {
     local got want
     got=$(measure "$freq")
     want=$(python3 "$HERE/tone.py" expect "$freq" "$@")
-    if close "$got" "$want" 0.3; then
+    if [[ -z $got ]]; then
+        mal "$preset en $freq Hz: sin señal en la grabación"
+    elif close "$got" "$want" 0.3; then
         ok "$preset en $freq Hz: $got dBFS (esperado $want)"
     else
         mal "$preset en $freq Hz: $got dBFS, y los biquads dan $want"
@@ -87,7 +89,7 @@ check() {
     return 0
 }
 
-isolated_start
+isolated_start || { echo "la pila aislada no arrancó; registros en $ISOLATED_ROOT"; export ISOLATED_KEEP=1; exit 1; }
 for _ in $(seq 200); do
     gdbus call --session -d org.vasak.Equalizer -o /org/vasak/Equalizer \
         -m org.freedesktop.DBus.Properties.Get org.vasak.Equalizer1 Available 2>/dev/null \
@@ -100,7 +102,9 @@ flat=$(measure 1000)
 eq SetEnabled false
 off=$(measure 1000)
 eq SetEnabled true
-if close "$flat" "$off" 0.01; then
+if [[ -z $flat || -z $off ]]; then
+    mal "1 kHz: sin señal en la grabación (plano: «$flat», sin el filtro: «$off»)"
+elif close "$flat" "$off" 0.01; then
     ok "1 kHz plano: $flat dBFS; sin el filtro: $off dBFS"
 else
     mal "1 kHz plano da $flat dBFS y sin el filtro $off dBFS: el filtro en cero no es transparente"

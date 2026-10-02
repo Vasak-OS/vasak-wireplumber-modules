@@ -240,6 +240,11 @@ Lo que no cubre, a sabiendas:
 - **Grabar el monitor de la salida por omisión** graba lo que entra al
   ecualizador, no lo que sale: la política también engancha ahí al filtro. Una
   captura de pantalla con «el audio del escritorio» graba sin ecualizar.
+  Comprobado con WirePlumber 0.5.18 por las tres vías —`pw-record` con
+  `stream.capture.sink`, `parecord -d @DEFAULT_MONITOR@` y `parecord -d
+  <salida>.monitor`, aun nombrando la salida—: las tres quedan enganchadas al
+  monitor de `vasak-equalizer`. `follows-output` lo mira, para que si
+  WirePlumber cambia esto se entere el README.
 
 ### Por qué en el demonio de PipeWire y no en un proceso aparte
 
@@ -326,7 +331,9 @@ Lo que la interfaz hace con esto:
   «Rock», «Jazz», «Clásica» y «Personalizado» (`custom`) van en los `locales/`
   de cada aplicación.
 - **Arrastrar una banda**: `SetGain` mientras se arrastra, limitado a unas 30
-  llamadas por segundo. Suena en el acto; el archivo se escribe al soltar.
+  llamadas por segundo. Suena en el acto; el archivo se escribe medio segundo
+  después del último cambio, sin que la interfaz tenga que avisar que se soltó
+  (no hay método para eso, ni hace falta).
 - **Cambiar de perfil**: `SetPreset`, y animar los tiradores hacia los `Gains`
   que llegan en `PropertiesChanged`. El sonido cambia en el acto.
 - **El encabezado**: el perfil activo sale de `Preset`; «Guardado» / «Sin

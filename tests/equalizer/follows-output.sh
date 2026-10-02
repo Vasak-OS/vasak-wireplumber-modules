@@ -119,7 +119,7 @@ start_player() {
 
 trap 'kill "${PLAYER:-}" 2>/dev/null; isolated_stop' EXIT
 
-isolated_start
+isolated_start || { echo "la pila aislada no arrancó; registros en $ISOLATED_ROOT"; export ISOLATED_KEEP=1; exit 1; }
 
 echo "── el filtro aparece y el módulo lo encuentra"
 if wait_available; then ok "org.vasak.Equalizer dice Available = true"; else mal "el módulo no encontró el filtro"; fi
@@ -143,6 +143,18 @@ if command -v pipewire-pulse >/dev/null && command -v pacat >/dev/null; then
         pacat --raw --client-name=pulse-player /dev/zero >/dev/null 2>&1 &
     PACAT=$!
     check_link yes "pulse-player -> vasak-equalizer" "un cliente de PulseAudio suena en el ecualizador"
+    # Lo que dice el README, mirado: grabar el monitor de la salida por omisión
+    # graba la entrada del ecualizador, no su salida. Si WirePlumber lo cambia,
+    # esto falla y el README tiene que cambiar con él.
+    if command -v parecord >/dev/null; then
+        PULSE_SERVER=unix:$ISOLATED_RUN/pulse/native \
+            parecord --raw --client-name=monitor-recorder -d @DEFAULT_MONITOR@ /dev/null >/dev/null 2>&1 &
+        RECORDER=$!
+        check_link yes "vasak-equalizer -> monitor-recorder" \
+            "grabar el monitor de la salida graba la entrada del ecualizador (README)"
+        kill "$RECORDER" 2>/dev/null
+        wait "$RECORDER" 2>/dev/null
+    fi
     kill "$PACAT" "$PULSE" 2>/dev/null
     wait "$PACAT" "$PULSE" 2>/dev/null
 else
@@ -175,19 +187,34 @@ check_link no  "test-player -> test-sink-b" "y no queda un enlace directo de má
 echo "── lo elegido sobrevive al reinicio"
 eq SetPreset jazz
 eq SetEnabled false
-sleep 1   # el guardado espera medio segundo al último cambio
-if grep -q '^preset=jazz' "$XDG_STATE_HOME/vasak/equalizer.ini" 2>/dev/null; then
-    ok "se guardó en XDG_STATE_HOME/vasak/equalizer.ini"
+# El guardado espera medio segundo al último cambio: se espera hasta 5 s a que
+# el archivo diga las dos cosas.
+STATE_FILE=$XDG_STATE_HOME/vasak/equalizer.ini
+saved=no
+for _ in $(seq 100); do
+    if grep -q '^preset=jazz' "$STATE_FILE" 2>/dev/null &&
+       grep -q '^enabled=false' "$STATE_FILE" 2>/dev/null; then
+        saved=yes
+        break
+    fi
+    sleep 0.05
+done
+if [[ $saved == yes ]]; then
+    ok "se guardó en XDG_STATE_HOME/vasak/equalizer.ini, perfil y apagado"
 else
-    mal "no está guardado: $(cat "$XDG_STATE_HOME/vasak/equalizer.ini" 2>&1)"
+    mal "no está guardado: $(cat "$STATE_FILE" 2>&1)"
 fi
 kill "$PLAYER" 2>/dev/null
-isolated_restart
+isolated_restart || mal "la pila aislada no volvió a arrancar"
 wait_available || mal "después de reiniciar, el módulo no encontró el filtro"
 check_gain eq_31:Gain 3 "PipeWire y WirePlumber reiniciados: jazz otra vez en el nodo"
 eq_get Enabled | grep -q false && ok "y sigue apagado" || mal "Enabled es $(eq_get Enabled)"
 start_player
-check_link yes "test-player -> test-sink-b" "apagado también después de reiniciar: directo a la salida"
+# La salida por omisión que haya elegido WirePlumber al volver: qué salida es
+# no importa acá —eso lo guarda WirePlumber, no este módulo—, sino que el
+# reproductor vaya directo a ella.
+default=$(wpctl inspect @DEFAULT_AUDIO_SINK@ | sed -n 's/.*node.name = "\(.*\)"/\1/p')
+check_link yes "test-player -> $default" "apagado también después de reiniciar: directo a la salida"
 check_link no  "test-player -> vasak-equalizer" "sin pasar por el ecualizador"
 
 printf '\n'
