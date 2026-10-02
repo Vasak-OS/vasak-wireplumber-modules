@@ -1,5 +1,5 @@
 project('vasak-wireplumber-modules', 'c',
-    version: '0.2.1',
+    version: '0.3.0',
     license: 'GPL-3.0-or-later',
     meson_version: '>=0.60.0',
     default_options: ['c_std=c11', 'warning_level=2'])
@@ -35,5 +35,15 @@ endif
 install_data('datos/50-vasak-permisos-de-medios.conf',
     install_dir: get_option('datadir') / 'wireplumber' / 'wireplumber.conf.d')
 
+# El ecualizador: dos fragmentos, uno para cada demonio. El de PipeWire carga el
+# filtro —tiene que estar en el grafo antes de que nadie suene— y el de
+# WirePlumber carga el módulo que le pone las ganancias guardadas.
+install_data('data/50-vasak-equalizer.conf',
+    install_dir: get_option('datadir') / 'wireplumber' / 'wireplumber.conf.d')
+install_data('data/60-vasak-equalizer.conf',
+    install_dir: get_option('datadir') / 'pipewire' / 'pipewire.conf.d')
+
 subdir('src/permisos-de-medios')
+subdir('src/equalizer')
 subdir('pruebas')
+subdir('tests/equalizer')
