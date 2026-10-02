@@ -438,6 +438,57 @@ test_unwritable_state_is_not_saved (Fixture *f, gconstpointer d G_GNUC_UNUSED)
   g_rmdir (f->path);
 }
 
+static void
+test_debounce_and_flush (Fixture *f, gconstpointer d G_GNUC_UNUSED)
+{
+  /* Con la espera larga, varios cambios seguidos son una sola escritura: el
+   * arrastre de un deslizador no escribe el disco en cada paso. */
+  vasak_eq_service_free (f->service);
+  f->service = vasak_eq_service_new (f->path, 60000, on_apply, f);
+  g_assert_true (vasak_eq_service_export (f->service, f->server, NULL));
+
+  for (guint i = 0; i < 5; i++) {
+    g_autoptr (GVariant) r = call (f, "SetGain",
+                                   g_variant_new ("(ud)", 2, (gdouble) i), NULL);
+  }
+  /* Los cinco suenan —el primero, en 0 dB, ya pasa de «flat» a «custom»— */
+  g_assert_cmpuint (f->applied, ==, 5);
+  /* y ninguno se escribió todavía. */
+  g_assert_false (g_file_test (f->path, G_FILE_TEST_EXISTS));
+
+  guint before = f->signals;
+  vasak_eq_service_flush (f->service);
+  /* El aviso de «guardado», que llega por el bus. */
+  wait_signals (f, before + 1);
+  g_autofree gchar *contents = NULL;
+  g_assert_true (g_file_get_contents (f->path, &contents, NULL, NULL));
+  g_assert_nonnull (strstr (contents, "custom=0;0;4;"));
+
+  /* Y sin nada pendiente, `flush` no escribe ni avisa. */
+  g_assert_cmpint (g_remove (f->path), ==, 0);
+  f->signals = 0;
+  vasak_eq_service_flush (f->service);
+  spin ();
+  g_assert_false (g_file_test (f->path, G_FILE_TEST_EXISTS));
+  g_assert_cmpuint (f->signals, ==, 0);
+}
+
+static void
+test_export_twice_fails (Fixture *f, gconstpointer d G_GNUC_UNUSED)
+{
+  /* Dos servicios en la misma conexión: el segundo no puede publicar el mismo
+   * objeto, y lo dice en vez de pisar al primero. */
+  VasakEqService *other = vasak_eq_service_new (f->path, 0, NULL, NULL);
+  g_autoptr (GError) error = NULL;
+  g_assert_false (vasak_eq_service_export (other, f->server, &error));
+  g_assert_nonnull (error);
+  vasak_eq_service_free (other);
+
+  /* El primero sigue contestando. */
+  g_autoptr (GVariant) preset = get (f, "Preset");
+  g_assert_cmpstr (g_variant_get_string (preset, NULL), ==, "flat");
+}
+
 int
 main (int argc, char **argv)
 {
@@ -458,6 +509,10 @@ main (int argc, char **argv)
        test_restart_restores);
   ADD ("/service/si no se puede guardar, Saved lo dice",
        test_unwritable_state_is_not_saved);
+  ADD ("/service/varios cambios seguidos son una sola escritura",
+       test_debounce_and_flush);
+  ADD ("/service/publicar dos veces el mismo objeto falla",
+       test_export_twice_fails);
 #undef ADD
   return g_test_run ();
 }

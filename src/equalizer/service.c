@@ -118,9 +118,8 @@ property_value (VasakEqService *self, const gchar *name)
     return g_variant_new_boolean (self->state.enabled);
   if (g_str_equal (name, "Available"))
     return g_variant_new_boolean (self->available);
-  if (g_str_equal (name, "Saved"))
-    return g_variant_new_boolean (is_saved (self));
-  return NULL;
+  /* "Saved": la última de la introspección. */
+  return g_variant_new_boolean (is_saved (self));
 }
 
 /* Avisa por `PropertiesChanged` lo que difiera entre `before` y ahora. */
@@ -261,32 +260,30 @@ method_call (GDBusConnection *connection G_GNUC_UNUSED,
       invalid_args (invocation, "perfil desconocido: ver Presets, o «custom»");
       return;
     }
-  } else if (g_str_equal (method_name, "SetEnabled")) {
+  } else {
+    /* `SetEnabled`. GDBus ya rechazó lo que no está en la introspección —un
+     * método desconocido o con otra firma no llega hasta acá—, así que lo
+     * único que queda es este. */
     gboolean enabled;
     g_variant_get (parameters, "(b)", &enabled);
     self->state.enabled = enabled;
-  } else {
-    g_dbus_method_invocation_return_dbus_error (
-        invocation, "org.freedesktop.DBus.Error.UnknownMethod", method_name);
-    return;
   }
 
   changed (self, &before);
   g_dbus_method_invocation_return_value (invocation, NULL);
 }
 
+/* GDBus contesta solo por las propiedades que no están en la introspección:
+ * acá llegan únicamente las diez de arriba. */
 static GVariant *
 get_property (GDBusConnection *connection G_GNUC_UNUSED,
               const gchar *sender G_GNUC_UNUSED,
               const gchar *object_path G_GNUC_UNUSED,
               const gchar *interface_name G_GNUC_UNUSED,
-              const gchar *property_name, GError **error, gpointer data)
+              const gchar *property_name, GError **error G_GNUC_UNUSED,
+              gpointer data)
 {
-  GVariant *value = property_value (data, property_name);
-  if (value == NULL)
-    g_set_error (error, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_PROPERTY,
-                 "propiedad desconocida: %s", property_name);
-  return value;
+  return property_value (data, property_name);
 }
 
 static const GDBusInterfaceVTable vtable = {

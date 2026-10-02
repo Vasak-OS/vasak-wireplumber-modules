@@ -209,6 +209,39 @@ test_default_path (void)
   g_assert_cmpstr (path, ==, expected);
 }
 
+static void
+test_save_where_no_dir_can_be (Fixture *f, gconstpointer d G_GNUC_UNUSED)
+{
+  /* Un archivo donde tendría que ir el directorio: no se puede crear, y el
+   * error lo dice en vez de fingir que se guardó. */
+  g_autofree gchar *sub = g_path_get_dirname (f->path);
+  g_assert_true (g_file_set_contents (sub, "", 0, NULL));
+  VasakEqState s;
+  vasak_eq_state_defaults (&s);
+  g_autoptr (GError) error = NULL;
+  g_assert_false (vasak_eq_state_save (&s, f->path, &error));
+  g_assert_error (error, G_FILE_ERROR, G_FILE_ERROR_NOTDIR);
+  g_remove (sub);
+}
+
+static void
+test_equal_looks_at_everything (void)
+{
+  VasakEqState a, b;
+  vasak_eq_state_defaults (&a);
+  b = a;
+  g_assert_true (vasak_eq_state_equal (&a, &b));
+  /* El propio cuenta aunque no sea el que suena: es lo que se guarda. */
+  b.custom[7] = 1;
+  g_assert_false (vasak_eq_state_equal (&a, &b));
+  b = a;
+  b.enabled = FALSE;
+  g_assert_false (vasak_eq_state_equal (&a, &b));
+  b = a;
+  g_assert_true (vasak_eq_state_set_preset (&b, "jazz"));
+  g_assert_false (vasak_eq_state_equal (&a, &b));
+}
+
 int
 main (int argc, char **argv)
 {
@@ -220,6 +253,10 @@ main (int argc, char **argv)
                    test_invalid_changes_change_nothing);
   g_test_add_func ("/state/las diez de una vez", test_set_gains);
   g_test_add_func ("/state/la ruta va en XDG_STATE_HOME", test_default_path);
+  g_test_add_func ("/state/comparar mira los tres campos",
+                   test_equal_looks_at_everything);
+  g_test_add ("/state/sin dónde crear el directorio, guardar falla", Fixture,
+              NULL, setup, test_save_where_no_dir_can_be, teardown);
   g_test_add ("/state/sin archivo es el primer arranque", Fixture, NULL,
               setup, test_missing_file_is_first_boot, teardown);
   g_test_add ("/state/lo guardado vuelve entero", Fixture, NULL,
