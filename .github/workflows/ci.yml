@@ -16,9 +16,10 @@
 # workflow sube y por lo tanto no puede dejar de subir.
 #
 # Lo que sí se comprueba es lo único que decide algo: `camara.c`,
-# `decisiones.c`, `identidad.c` y `servicio.c`. Están separados del enganche con
-# WirePlumber justamente para esto — no incluyen ni un encabezado de `wp/`, así
-# que compilan y corren con glib pelado.
+# `decisiones.c`, `identidad.c` y `servicio.c` en los permisos de medios, y
+# `presets.c`, `state.c` y `service.c` en el ecualizador. Están separados del
+# enganche con WirePlumber justamente para esto — no incluyen ni un encabezado
+# de `wp/`, así que compilan y corren con glib (y GIO, el ecualizador) pelado.
 #
 # La lista de abajo está escrita a mano y ya se apartó una vez de
 # `pruebas/meson.build`. Lo que corresponde es correr `meson test`; mientras tanto
@@ -40,8 +41,11 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
+      # `dbus` por el `dbus-daemon` que levanta `GTestDBus` en la prueba de la
+      # interfaz del ecualizador: es un bus privado, y sin el demonio la prueba
+      # no puede ni empezar.
       - name: Instalar glib
-        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev dbus
 
       - name: Compilar y correr las pruebas
         run: |
@@ -58,6 +62,29 @@ jobs:
               src/permisos-de-medios/servicio.c \
               $(pkg-config --libs glib-2.0)
             "./pruebas-$prueba"
+          done
+
+      # Las del ecualizador, con la misma regla: lo que decide, sin WirePlumber.
+      # `config` compara los dos fragmentos con la tabla de bandas, y las rutas
+      # le llegan como a `meson test`.
+      - name: Compilar y correr las pruebas del ecualizador
+        env:
+          EQ_PIPEWIRE_CONF: data/60-vasak-equalizer.conf
+          EQ_WIREPLUMBER_CONF: data/50-vasak-equalizer.conf
+          EQ_MESON_BUILD: src/equalizer/meson.build
+        run: |
+          set -e
+          for prueba in presets state service config; do
+            gcc -std=c11 -Wall -Wextra -Werror \
+              $(pkg-config --cflags gio-2.0) \
+              -I src/equalizer \
+              -o "tests-equalizer-$prueba" \
+              "tests/equalizer/$prueba.c" \
+              src/equalizer/presets.c \
+              src/equalizer/state.c \
+              src/equalizer/service.c \
+              $(pkg-config --libs gio-2.0)
+            "./tests-equalizer-$prueba"
           done
 
       # ── Por qué estas corren acá y no sólo en `compilar-modulo` ────────────
@@ -177,8 +204,23 @@ jobs:
           # no está soportada y falla de maneras que no dicen nada de este
           # repositorio. Cuesta unos segundos más por corrida y evita que un
           # redibujo de la imagen rompa el trabajo.
+          #  · `pipewire`, `wireplumber`, `jq`, `python`, `dbus` — para las
+          #    dos pruebas de punta a punta del ecualizador, que levantan una
+          #    pila de audio aislada con salidas nulas y miran enlaces y niveles
+          #    de verdad. Sin ellos meson no las registra y lo dice; con ellos,
+          #    éste es el único lugar del workflow donde corren, porque Ubuntu
+          #    no trae WirePlumber 0.5. `pipewire-audio` es el que trae los
+          #    biquads (`libspa-filter-graph-plugin-builtin`) y el propio motor del
+          #    grafo (`libspa-filter-graph`):
+          #    `pipewire` solo no alcanza para cargar el filtro, y el filtro no
+          #    cargado se ve como «el ecualizador no hace nada». `pipewire-pulse`
+          #    y `libpulse` (por
+          #    `pacat`) para mirar que lo que entra por la API de PulseAudio
+          #    también pase por el filtro.
           pacman -Syu --noconfirm --needed \
-            gcc meson ninja pkgconf glib2 libwireplumber
+            gcc meson ninja pkgconf glib2 libwireplumber \
+            pipewire pipewire-audio pipewire-pulse libpulse wireplumber \
+            jq python dbus
 
       - name: Compilar el módulo
         run: |
@@ -191,17 +233,21 @@ jobs:
           # igual, y el aviso se deja ver en vez de taparlo: instalar
           # `wireplumber` para callar un warning sería meter el daemon entero
           # en el contenedor para curar una línea de log.
-          meson setup build -Dwerror=true
+          # `integration-tests=enabled`: acá los programas tienen que estar, y si
+          # falta uno es un error del contenedor, no algo que se saltea callado.
+          meson setup build -Dwerror=true -Dintegration-tests=enabled
           meson compile -C build
 
-      # Las ocho pruebas no dependen de WirePlumber y ya las corre `pruebas`, así
-      # que no son el objeto de este trabajo y no se las corre dos veces para
-      # fingir que se midió algo. Salen gratis porque `meson compile` ya las
-      # construyó, y lo que miran es que el `meson.build` que usa este trabajo
-      # siga construyendo las que el `for` de `pruebas` no construye: el mismo
-      # archivo que ya se apartó una vez de esa lista escrita a mano.
-      - name: Las pruebas de meson, de paso
-        run: meson test -C build
+      # Las pruebas unitarias no dependen de WirePlumber y ya las corre `pruebas`;
+      # acá salen gratis porque `meson compile` ya las construyó, y miran que el
+      # `meson.build` siga construyendo las que el `for` de `pruebas` no
+      # construye. Las que sí son de este trabajo son `equalizer-follows-output`
+      # y `equalizer-response`: el módulo compilado, cargado en un WirePlumber
+      # de verdad sobre un PipeWire aislado. Como root y sin sesión: el
+      # contenedor no tiene `XDG_RUNTIME_DIR`, y la pila aislada se arma la
+      # suya.
+      - name: Las pruebas de meson, y las de punta a punta del ecualizador
+        run: meson test -C build --print-errorlogs
 
   # ── SonarQube Cloud ──────────────────────────────────────────────────────
   #
@@ -251,7 +297,7 @@ jobs:
 
       - name: Instalar glib
         if: steps.token.outputs.hay == 'true'
-        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev dbus
 
       # ── La cobertura ─────────────────────────────────────────────────────
       #
@@ -342,6 +388,31 @@ jobs:
             fi
           done
 
+          # El ecualizador, con la misma receta: un subdirectorio por prueba y
+          # un objeto por archivo. Acá los nombres también se repiten —
+          # `tests/equalizer/state.c` y `src/equalizer/state.c`— y por eso
+          # mismo.
+          for prueba in presets state service config; do
+            dir="$destino/equalizer-$prueba"
+            mkdir -p "$dir"
+            gcc -std=c11 -Wall -Wextra -Werror --coverage \
+              $(pkg-config --cflags gio-2.0) -I src/equalizer \
+              -c -o "$dir/tests-$prueba.o" "tests/equalizer/$prueba.c" || problemas=1
+            for fuente in presets state service; do
+              gcc -std=c11 -Wall -Wextra -Werror --coverage \
+                $(pkg-config --cflags gio-2.0) -I src/equalizer \
+                -c -o "$dir/$fuente.o" "src/equalizer/$fuente.c" || problemas=1
+            done
+            gcc --coverage -o "$dir/tests-$prueba" "$dir"/*.o \
+              $(pkg-config --libs gio-2.0) || problemas=1
+            if [ -x "$dir/tests-$prueba" ] && [ "$problemas" -eq 0 ]; then
+              EQ_PIPEWIRE_CONF=data/60-vasak-equalizer.conf \
+              EQ_WIREPLUMBER_CONF=data/50-vasak-equalizer.conf \
+              EQ_MESON_BUILD=src/equalizer/meson.build \
+                "$dir/tests-$prueba" || problemas=1
+            fi
+          done
+
           if [ "$problemas" -ne 0 ]; then
             # Que el archivo exista aunque esté vacío. Un informe que falta y
             # un informe vacío dan lo mismo en el panel —0%— pero el vacío al
@@ -403,7 +474,7 @@ jobs:
             exit 0
           fi
 
-          echo "Cobertura de las fuentes que hoy se compilan (modulo.c queda afuera a propósito):"
+          echo "Cobertura de las fuentes que hoy se compilan (modulo.c y module.c quedan afuera a propósito):"
           # Se imprimen los números y no sólo el «se generó»: un paso que dice
           # que midió sin decir qué midió es el mismo problema del informe
           # vacío, un renglón más arriba.
@@ -441,6 +512,9 @@ jobs:
           # bando: se reclasifican, y es el análisis volviendo a leer `main` lo
           # que los cierra.
           #
+          # Las del ecualizador están en `tests/`, con nombre en inglés como pide
+          # el taller para lo nuevo, y van en las mismas tres listas.
+          #
           # Un archivo no puede estar en las dos listas, así que `pruebas` va
           # también en las exclusiones del código. Acá es redundante —`src` ya
           # no lo alcanza— y se deja igual para que el día que alguien abra
@@ -457,7 +531,7 @@ jobs:
             -Dsonar.organization=vasakos
             -Dsonar.projectKey=Vasak-OS_${{ github.event.repository.name }}
             -Dsonar.sources=src
-            -Dsonar.tests=pruebas
-            -Dsonar.exclusions=**/pruebas/**,**/build/**
-            -Dsonar.test.inclusions=**/pruebas/**
+            -Dsonar.tests=pruebas,tests
+            -Dsonar.exclusions=**/pruebas/**,**/tests/**,**/build/**
+            -Dsonar.test.inclusions=**/pruebas/**,**/tests/**
             -Dsonar.coverageReportPaths=build/cobertura/coverage.xml

@@ -1,0 +1,7 @@
+# Las pruebas de punta a punta del ecualizador levantan una pila de audio
+# aislada —PipeWire y WirePlumber propios, salidas nulas— y no tocan la de la
+# sesión. `auto` las registra si encuentra los programas; `disabled` las saca,
+# por ejemplo en una receta que no quiera levantar demonios en `check()`;
+# `enabled` falla si falta algo, que es lo que quiere el CI.
+option('integration-tests', type: 'feature', value: 'auto',
+    description: 'Pruebas de punta a punta del ecualizador sobre una pila de audio aislada')
